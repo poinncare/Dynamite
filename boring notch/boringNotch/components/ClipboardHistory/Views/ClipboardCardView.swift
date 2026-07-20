@@ -115,32 +115,21 @@ struct ClipboardCardView: View {
                     .padding(.bottom, 18)
             }
 
-            // Footer: app + pin + relative time (over media via gradient scrim)
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                if isVisualMedia {
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.55)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 28)
-                    .allowsHitTesting(false)
+            // Footer: app + pin + relative time
+            HStack(spacing: 4) {
+                appIcon
+                    .frame(width: 14, height: 14)
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(isVisualMedia ? .white.opacity(0.95) : .orange)
                 }
-                HStack(spacing: 4) {
-                    appIcon
-                        .frame(width: 14, height: 14)
-                    if isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(isVisualMedia ? .white.opacity(0.95) : .orange)
-                    }
-                    Spacer(minLength: 2)
-                    footerTrailing
-                }
-                .padding(.horizontal, inset)
-                .padding(.bottom, 6)
+                Spacer(minLength: 2)
+                footerTrailing
             }
+            .padding(.horizontal, inset)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
 
             // Green fill from center (selection accent)
             if copyPhase != nil {
