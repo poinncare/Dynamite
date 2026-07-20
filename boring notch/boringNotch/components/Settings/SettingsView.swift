@@ -55,6 +55,12 @@ struct SettingsView: View {
                 NavigationLink(value: "Clipboard") {
                     Label(L("Clipboard"), systemImage: "doc.on.clipboard")
                 }
+                NavigationLink(value: "Usage") {
+                    Label(L("Usage"), systemImage: "chart.bar.fill")
+                }
+                NavigationLink(value: "Spaces") {
+                    Label(L("Spaces"), systemImage: "square.stack.3d.up.fill")
+                }
                 NavigationLink(value: "Shortcuts") {
                     Label(L("Shortcuts"), systemImage: "keyboard")
                 }
@@ -91,6 +97,13 @@ struct SettingsView: View {
                     Shelf()
                 case "Clipboard":
                     ClipboardSettings()
+                case "Usage":
+                    UsageSettingsView()
+                case "Spaces":
+                    SpacesSettingsView()
+                case "Space":
+                    // Legacy selection key
+                    UsageSettingsView()
                 case "Shortcuts":
                     Shortcuts()
                 case "Extensions":

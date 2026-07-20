@@ -24,11 +24,42 @@
 	<array>
 		<string>com.spotify.client</string>
 		<string>com.apple.Music</string>
+		<string>com.apple.Terminal</string>
 	</array>
 	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
+	<!-- Agent detection + AI usage: read CLI install dirs and auth files (Orca/CodexBar parity) -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/.claude/</string>
+		<string>/.codex/</string>
+		<string>/.grok/</string>
+		<string>/.config/</string>
+		<string>/.local/</string>
+		<string>/.nvm/</string>
+		<string>/.volta/</string>
+		<string>/.asdf/</string>
+		<string>/.fnm/</string>
+		<string>/.bun/</string>
+		<string>/.yarn/</string>
+		<string>/.cursor/</string>
+		<string>/Library/pnpm/</string>
+		<string>/.gemini/</string>
+		<string>/.npm/</string>
+		<!-- Claude export written by Terminal bridge after auth login -->
+		<string>/Library/Application Support/boringNotch/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/opt/homebrew/bin/</string>
+		<string>/opt/homebrew/sbin/</string>
+		<string>/usr/local/bin/</string>
+		<string>/usr/local/sbin/</string>
+		<string>/usr/bin/</string>
+		<string>/bin/</string>
 	</array>
 </dict>
 </plist>

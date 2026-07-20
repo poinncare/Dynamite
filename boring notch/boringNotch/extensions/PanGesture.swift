@@ -124,6 +124,20 @@ private struct ScrollMonitor: NSViewRepresentable {
             let isAxisDominant: Bool = direction.isHorizontal ? (absDX >= axisDominanceFactor * absDY) : (absDY >= axisDominanceFactor * absDX)
             guard isAxisDominant else { return }
 
+            // If the cursor is over a scrollable area that can still scroll in this
+            // direction, let the ScrollView consume the event and do NOT start a
+            // notch close/open pan. At the edge (or outside a scroll view), keep
+            // the swipe-to-collapse gesture working.
+            if scrollViewCanAbsorb(event, direction: direction) {
+                // Reset any in-progress pan so mixed scroll→pan doesn't jump-close.
+                if active {
+                    action(0, .ended)
+                    active = false
+                    accumulated = 0
+                }
+                return
+            }
+
             // Scale non-precise (mouse wheel) scrolling deltas so they feel similar to
             // trackpad gestures.
             let raw = direction.signed(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY)
@@ -140,6 +154,68 @@ private struct ScrollMonitor: NSViewRepresentable {
             }
             // Schedule a timeout to end the gesture if no further scroll events arrive.
             scheduleEndTimeout()
+        }
+
+        /// True when an NSScrollView under the cursor still has room to scroll
+        /// along `direction` — then notch pan must not steal the gesture.
+        private func scrollViewCanAbsorb(_ event: NSEvent, direction: PanDirection) -> Bool {
+            guard let window = event.window,
+                  let contentView = window.contentView else { return false }
+            let point = contentView.convert(event.locationInWindow, from: nil)
+            guard let hit = contentView.hitTest(point) else { return false }
+
+            var node: NSView? = hit
+            while let view = node {
+                if let scroll = view as? NSScrollView {
+                    return scroll.hasScrollRoom(in: direction)
+                }
+                if let clip = view as? NSClipView, let scroll = clip.superview as? NSScrollView {
+                    return scroll.hasScrollRoom(in: direction)
+                }
+                // SwiftUI hosts scrolling content in nested private views — walk parents.
+                node = view.superview
+            }
+            return false
+        }
+    }
+}
+
+private extension NSScrollView {
+    /// Whether the document can still move in the pan-gesture direction.
+    func hasScrollRoom(in direction: PanDirection) -> Bool {
+        guard let doc = documentView else { return false }
+        let visible = contentView.documentVisibleRect
+        let bounds = doc.isFlipped ? doc.bounds : doc.bounds
+        // Normalize to flipped-like “origin at top-left of content”
+        let contentH = bounds.height
+        let contentW = bounds.width
+        let visH = visible.height
+        let visW = visible.width
+        let maxY = max(0, contentH - visH)
+        let maxX = max(0, contentW - visW)
+        let y = visible.origin.y
+        let x = visible.origin.x
+        let edge: CGFloat = 1.5
+
+        switch direction {
+        case .up:
+            // Close-notch pan maps to “scroll content further toward bottom” on flipped views
+            // (finger swipe up). If not yet at bottom, let scroll absorb.
+            if doc.isFlipped {
+                return y < maxY - edge
+            } else {
+                return y > edge
+            }
+        case .down:
+            if doc.isFlipped {
+                return y > edge
+            } else {
+                return y < maxY - edge
+            }
+        case .left:
+            return x > edge
+        case .right:
+            return x < maxX - edge
         }
     }
 }

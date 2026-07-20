@@ -180,7 +180,7 @@ struct ContentView: View {
                         } else if newState == .closed {
                             NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: false)
                             ClipboardKeyboardMonitor.shared.stop()
-                            ClipboardTextPopupController.shared.hide(postNotification: false)
+                            NotificationCenter.default.post(name: .clipboardRequestCloseQuickLook, object: nil)
                         }
                     }
                     .onChange(of: coordinator.currentView) { _, newView in
@@ -199,7 +199,7 @@ struct ContentView: View {
                         } else {
                             // Drop clipboard-only handlers; keep notch-wide ⌘ session + key focus
                             ClipboardKeyboardMonitor.shared.disableClipboardHandlers()
-                            ClipboardTextPopupController.shared.hide(postNotification: false)
+                            NotificationCenter.default.post(name: .clipboardRequestCloseQuickLook, object: nil)
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .notchRequestClose)) { _ in
@@ -391,13 +391,12 @@ struct ContentView: View {
                         ShelfView()
                     case .clipboard:
                         ClipboardHistoryView()
+                    case .usage:
+                        UsageTabView()
                     }
                 }
-                .transition(
-                    .scale(scale: 0.8, anchor: .top)
-                    .combined(with: .opacity)
-                    .animation(.smooth(duration: 0.35))
-                )
+                // No scale/move on tab swaps — avoids music/home content “dropping” from the top.
+                .transition(.opacity)
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
                 .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)

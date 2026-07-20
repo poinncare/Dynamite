@@ -455,6 +455,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Agent detection + subscription usage (auto-refresh, no restart)
+        Task { @MainActor in
+            if Defaults[.usageTabEnabled] {
+                AgentDetectionService.shared.start(scanImmediately: true)
+                RateLimitService.shared.start(fetchImmediately: false)
+            }
+        }
+
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
             let window = createBoringNotchWindow(

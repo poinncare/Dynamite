@@ -7,17 +7,25 @@ import SwiftUI
 
 struct TabButton: View {
     let label: String
-    let icon: String
+    let icon: SpaceIconKind
     let selected: Bool
     /// 1-based ⌘N badge when command is held; nil to hide.
     var commandIndex: Int? = nil
     let onClick: () -> Void
 
     var body: some View {
-        Button(action: onClick) {
+        // Clawd + speedometer read larger than default SF Symbols in the tab strip.
+        let iconSize: CGFloat = {
+            switch icon {
+            case .mascotRed, .mascotWhite: return 20
+            case .gauge: return 17
+            default: return 14
+            }
+        }()
+        return Button(action: onClick) {
             ZStack(alignment: .top) {
-                Image(systemName: icon)
-                    .padding(.horizontal, 15)
+                SpaceIconView(icon: icon, size: iconSize, selected: selected)
+                    .padding(.horizontal, icon.prefersLargerTabSize ? 11 : 15)
                     .contentShape(Capsule())
 
                 if let commandIndex, commandIndex >= 1, commandIndex <= 9 {
@@ -37,12 +45,7 @@ struct TabButton: View {
         }
         .buttonStyle(PlainButtonStyle())
         .animation(.easeInOut(duration: 0.12), value: commandIndex != nil)
+        .animation(.easeInOut(duration: 0.12), value: selected)
         .help(label)
-    }
-}
-
-#Preview {
-    TabButton(label: "Home", icon: "house.fill", selected: true, commandIndex: 1) {
-        print("Tapped")
     }
 }

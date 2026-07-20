@@ -48,7 +48,7 @@
 | Home                | Медиа / live activities                                                                                                                                                                                 |
 | Shelf               | Drag-and-drop файловый трей                                                                                                                                                                             |
 | Clipboard           | История буфера (карточки)                                                                                                                                                                               |
-| CodexBar / AI usage | **Планируется** — отдельная вкладка, подключение провайдеров в Settings, статус-бары usage с логотипами; автопоиск установленных агентов в системе (референс: [orca](https://github.com/stablyai/orca)) |
+| Space / Usage       | Вкладка usage в шторке (Claude / Codex / Grok); Settings → Space: agents + refresh; автодетекция CLI как в [orca](https://github.com/stablyai/orca); usage обновляется без restart |
 
 
 ## Границы

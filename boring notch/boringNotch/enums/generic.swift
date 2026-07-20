@@ -28,6 +28,8 @@ public enum NotchViews {
     case home
     case shelf
     case clipboard
+    /// Subscription usage / space (Claude, Codex, Grok, …)
+    case usage
 }
 
 enum SettingsEnum {

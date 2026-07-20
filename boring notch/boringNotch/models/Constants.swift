@@ -172,6 +172,9 @@ extension Defaults.Keys {
     static let autoRemoveShelfItems = Key<Bool>("autoRemoveShelfItems", default: false)
     static let expandedDragDetection = Key<Bool>("expandedDragDetection", default: true)
 
+    // MARK: Space / Usage (AI subscription limits)
+    static let usageTabEnabled = Key<Bool>("usageTabEnabled", default: true)
+
     // MARK: Clipboard History (Pocket)
     static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: true)
     static let clipboardCheckInterval = Key<Double>("clipboardCheckInterval", default: 0.5)

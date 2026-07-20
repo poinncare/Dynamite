@@ -13,11 +13,13 @@ struct ClipboardHistoryView: View {
     @ObservedObject private var keyboard = ClipboardKeyboardMonitor.shared
     @ObservedObject private var language = LanguageManager.shared
     @ObservedObject private var coordinator = BoringViewCoordinator.shared
+    @StateObject private var quickLookService = QuickLookService()
 
-    @State private var showTextPopup = false
     @State private var now = Date()
-    /// Selected card frame in AppKit screen coords (for popup arrow + placement).
-    @State private var selectedCardScreenFrame: CGRect = .null
+    /// Temp files created so system Quick Look can preview in-memory clipboard data.
+    @State private var tempPreviewURLs: [URL] = []
+    /// Whether we called `SharingStateManager.beginInteraction` for an open QL session.
+    @State private var holdingNotchOpenForQL = false
     /// Copy animation target + phase
     @State private var copyAnimatingID: PersistentIdentifier?
     @State private var copyPhase: ClipboardCopyPhase?
@@ -31,6 +33,10 @@ struct ClipboardHistoryView: View {
     private let bottomSafe: CGFloat = 10
     private let topSafe: CGFloat = 4
     private let stripHorizontalInset: CGFloat = 2
+
+    private var isQuickLookVisible: Bool {
+        quickLookService.isQuickLookOpen
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -48,42 +54,40 @@ struct ClipboardHistoryView: View {
         }
         .onDisappear {
             teardownKeyboard()
-            closePopup(animated: false)
+            closeQuickLook()
             cancelPendingCopyClose()
         }
-        // Re-bind on every tab re-entry (click / ⌘3 / cycle) — not only first onAppear
         .onReceive(NotificationCenter.default.publisher(for: .clipboardTabDidActivate)) { _ in
             activateClipboardSession()
         }
-        // Relative time only; 60s is enough for "now" → "1m" and avoids strip invalidation
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
             now = date
         }
-        .onChange(of: showTextPopup) { _, open in
-            keyboard.popupOpen = open
-        }
         .onChange(of: vm.notchState) { _, state in
             if state == .closed {
-                closePopup(animated: false)
+                closeQuickLook()
                 cancelPendingCopyClose()
             } else if state == .open, coordinator.currentView == .clipboard {
                 activateClipboardSession()
             }
         }
         .onChange(of: manager.selectedIndex) { _, _ in
-            if showTextPopup {
-                refreshPopupForSelection()
+            if isQuickLookVisible {
+                openQuickLookForSelection()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardTextPopupDidHide)) { _ in
-            if showTextPopup {
-                showTextPopup = false
-                keyboard.popupOpen = false
+        .onChange(of: quickLookService.isQuickLookOpen) { wasOpen, isOpen in
+            if wasOpen, !isOpen {
+                cleanupTempPreviews()
+                releaseNotchHold()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardRequestCloseQuickLook)) { _ in
+            closeQuickLook()
         }
     }
 
-    // MARK: - Metrics (pre-iter6 adaptive rectangles)
+    // MARK: - Metrics
 
     private struct LayoutMetrics {
         let cardHeight: CGFloat
@@ -134,19 +138,6 @@ struct ClipboardHistoryView: View {
                                 }
                             )
                             .id(id)
-                            .background {
-                                if index == manager.selectedIndex {
-                                    ScreenFrameReporter { frame in
-                                        selectedCardScreenFrame = frame
-                                        if showTextPopup {
-                                            ClipboardTextPopupController.shared.update(
-                                                text: popupText(for: manager.selectedItem),
-                                                anchorScreenX: frame.midX
-                                            )
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
                     .padding(.horizontal, stripHorizontalInset)
@@ -186,8 +177,6 @@ struct ClipboardHistoryView: View {
 
     // MARK: - Copy + animation + delayed close
 
-    /// First click selects the card; a second click on the already-selected card copies
-    /// (or pastes when `clipboardPasteAutomatically` is on).
     private func handleCardTap(item: HistoryItem, index: Int) {
         if index != manager.selectedIndex {
             manager.selectedIndex = index
@@ -203,6 +192,7 @@ struct ClipboardHistoryView: View {
     private func performAnimatedAction(item: HistoryItem, index: Int, paste: Bool) {
         cancelPendingCopyClose()
         manager.selectedIndex = index
+        closeQuickLook()
 
         if paste {
             manager.pasteItem(item)
@@ -229,7 +219,6 @@ struct ClipboardHistoryView: View {
         let close = DispatchWorkItem {
             copyAnimatingID = nil
             copyPhase = nil
-            closePopup(animated: false)
             vm.close()
         }
         closeWorkItem = close
@@ -245,56 +234,60 @@ struct ClipboardHistoryView: View {
         copyPhase = nil
     }
 
-    // MARK: - Space popup
+    // MARK: - System Quick Look (Space)
 
-    private func popupText(for item: HistoryItem?) -> String? {
-        guard let item else { return nil }
-        switch item.contentKind {
-        case .text, .link:
-            let t = item.text ?? item.previewableText
-            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : t
-        default:
-            return nil
-        }
-    }
-
-    private var popupText: String? {
-        popupText(for: manager.selectedItem)
-    }
-
-    private func togglePopup() {
-        if showTextPopup {
-            closePopup()
+    private func toggleQuickLook() {
+        if isQuickLookVisible {
+            closeQuickLook()
             return
         }
-        guard let text = popupText else { return }
-        showTextPopup = true
-        keyboard.popupOpen = true
-        let anchor = selectedCardScreenFrame.isNull ? nil : selectedCardScreenFrame.midX
-        ClipboardTextPopupController.shared.show(text: text, anchorScreenX: anchor)
-        requestKeyWindow()
+        openQuickLookForSelection()
     }
 
-    private func refreshPopupForSelection() {
-        let text = popupText
-        let anchor = selectedCardScreenFrame.isNull ? nil : selectedCardScreenFrame.midX
-        if let text {
-            ClipboardTextPopupController.shared.update(text: text, anchorScreenX: anchor)
-        } else {
-            closePopup(animated: false)
+    private func openQuickLookForSelection() {
+        guard let item = manager.selectedItem else {
+            closeQuickLook()
+            return
         }
+        let prepared = ClipboardQuickLookSupport.previewURLs(for: item)
+        guard !prepared.urls.isEmpty else {
+            closeQuickLook()
+            return
+        }
+        let previousTemps = tempPreviewURLs
+        tempPreviewURLs = prepared.temporary
+        holdNotchOpen()
+        quickLookService.show(urls: prepared.urls, selectFirst: true)
+        ClipboardQuickLookSupport.cleanupTemporary(
+            previousTemps.filter { !prepared.temporary.contains($0) }
+        )
     }
 
-    private func closePopup(animated: Bool = true) {
-        ClipboardTextPopupController.shared.hide(postNotification: false)
-        showTextPopup = false
-        keyboard.popupOpen = false
+    private func closeQuickLook() {
+        quickLookService.hide()
+        cleanupTempPreviews()
+        releaseNotchHold()
+    }
+
+    private func cleanupTempPreviews() {
+        ClipboardQuickLookSupport.cleanupTemporary(tempPreviewURLs)
+        tempPreviewURLs = []
+    }
+
+    private func holdNotchOpen() {
+        guard !holdingNotchOpenForQL else { return }
+        holdingNotchOpenForQL = true
+        SharingStateManager.shared.beginInteraction()
+    }
+
+    private func releaseNotchHold() {
+        guard holdingNotchOpenForQL else { return }
+        holdingNotchOpenForQL = false
+        SharingStateManager.shared.endInteraction()
     }
 
     // MARK: - Keyboard lifecycle
 
-    /// Re-bind clipboard handlers + key focus. Idempotent for monitors; safe on every entry.
     private func activateClipboardSession() {
         setupKeyboard()
         requestKeyWindow()
@@ -302,47 +295,44 @@ struct ClipboardHistoryView: View {
 
     private func setupKeyboard() {
         let monitor = ClipboardKeyboardMonitor.shared
-        monitor.startNotchSession() // no-op if already running
+        monitor.startNotchSession()
         monitor.onMove = { dx, dy in
             manager.moveSelection(dx: dx, dy: dy)
         }
         monitor.onEnter = {
-            if showTextPopup {
-                closePopup()
+            if isQuickLookVisible {
+                closeQuickLook()
             }
             guard let item = manager.selectedItem else { return }
             performAnimatedAction(item: item, index: manager.selectedIndex, paste: true)
         }
         monitor.onDelete = {
             manager.deleteSelected()
-            if showTextPopup {
-                refreshPopupForSelection()
+            if isQuickLookVisible {
+                openQuickLookForSelection()
             }
         }
         monitor.onEscape = {
-            if showTextPopup {
-                closePopup()
+            if isQuickLookVisible {
+                closeQuickLook()
             } else {
                 vm.close()
             }
         }
         monitor.onSpace = {
-            togglePopup()
+            toggleQuickLook()
         }
         monitor.onCopy = {
             guard let item = manager.selectedItem else { return }
             performAnimatedAction(item: item, index: manager.selectedIndex, paste: false)
         }
-        monitor.popupOpen = showTextPopup
         monitor.enableClipboardHandlers()
     }
 
     private func teardownKeyboard() {
-        // Transition race: old instance may disappear AFTER a new clipboard tab re-entered.
-        // Never clear handlers if clipboard is the active tab again.
         guard BoringViewCoordinator.shared.currentView != .clipboard else { return }
         ClipboardKeyboardMonitor.shared.disableClipboardHandlers()
-        closePopup(animated: false)
+        closeQuickLook()
     }
 
     private func requestKeyWindow() {
@@ -358,9 +348,7 @@ struct ClipboardHistoryView: View {
 }
 
 extension Notification.Name {
-    /// Allow notch window to become key (clipboard nav + notch-wide ⌘).
     static let clipboardTabKeyFocus = Notification.Name("clipboardTabKeyFocus")
-    /// Posted on every entry to the clipboard tab so handlers rebind even if onAppear races.
     static let clipboardTabDidActivate = Notification.Name("clipboardTabDidActivate")
-    static let clipboardTextPopupDidHide = Notification.Name("clipboardTextPopupDidHide")
+    static let clipboardRequestCloseQuickLook = Notification.Name("clipboardRequestCloseQuickLook")
 }

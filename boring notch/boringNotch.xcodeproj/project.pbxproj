@@ -23,7 +23,7 @@
 		P0C1A54B0F9D40D16D5DAE5A /* ClipboardCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0CCDA23BE2B479BB8EB6021 /* ClipboardCardView.swift */; };
 		P0C1A0C5ACE94DE1E8FF63D0 /* ClipboardKeyboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0C0717DB52CA321451420B8 /* ClipboardKeyboardMonitor.swift */; };
 		P0C2E5F693DDC1C7EDF5D323 /* ClipboardHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0C290BEE9F0D54073538F9A /* ClipboardHistoryView.swift */; };
-		P0CTEXTPOPUP01BFILE000001 /* ClipboardTextPopupPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0CTEXTPOPUP01FREF000001 /* ClipboardTextPopupPanel.swift */; };
+		P0CQLSUPPORT01BFILE000001 /* ClipboardQuickLookSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0CQLSUPPORT01FREF000001 /* ClipboardQuickLookSupport.swift */; };
 		P0CICONCACHE01BFILE000001 /* ClipboardIconCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0CICONCACHE01FREF000001 /* ClipboardIconCache.swift */; };
 		P0CMEDIATHUMB01BFILE0001 /* ClipboardMediaThumbnailCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = P0CMEDIATHUMB01FREF0001 /* ClipboardMediaThumbnailCache.swift */; };
 		1100290C2E847E2800035A57 /* NSItemProvider+LoadHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1100290B2E847E2800035A57 /* NSItemProvider+LoadHelpers.swift */; };
@@ -217,7 +217,7 @@
 		P0CCDA23BE2B479BB8EB6021 /* ClipboardCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCardView.swift; sourceTree = "<group>"; };
 		P0C0717DB52CA321451420B8 /* ClipboardKeyboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardKeyboardMonitor.swift; sourceTree = "<group>"; };
 		P0C290BEE9F0D54073538F9A /* ClipboardHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHistoryView.swift; sourceTree = "<group>"; };
-		P0CTEXTPOPUP01FREF000001 /* ClipboardTextPopupPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardTextPopupPanel.swift; sourceTree = "<group>"; };
+		P0CQLSUPPORT01FREF000001 /* ClipboardQuickLookSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardQuickLookSupport.swift; sourceTree = "<group>"; };
 		P0CICONCACHE01FREF000001 /* ClipboardIconCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardIconCache.swift; sourceTree = "<group>"; };
 		P0CMEDIATHUMB01FREF0001 /* ClipboardMediaThumbnailCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMediaThumbnailCache.swift; sourceTree = "<group>"; };
 		1100290B2E847E2800035A57 /* NSItemProvider+LoadHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSItemProvider+LoadHelpers.swift"; sourceTree = "<group>"; };
@@ -363,6 +363,7 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		112FB72F2CCF12CC0015238C /* private */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = private; sourceTree = "<group>"; };
 		11F748502EC9AABA00F841DB /* BoringNotchXPCHelper */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (11F7485C2EC9AABA00F841DB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = BoringNotchXPCHelper; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B01 /* Usage */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Usage; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -428,7 +429,7 @@
 				P0CCDA23BE2B479BB8EB6021 /* ClipboardCardView.swift */,
 				P0C0717DB52CA321451420B8 /* ClipboardKeyboardMonitor.swift */,
 				P0C290BEE9F0D54073538F9A /* ClipboardHistoryView.swift */,
-				P0CTEXTPOPUP01FREF000001 /* ClipboardTextPopupPanel.swift */,
+				P0CQLSUPPORT01FREF000001 /* ClipboardQuickLookSupport.swift */,
 				P0CICONCACHE01FREF000001 /* ClipboardIconCache.swift */,
 				P0CMEDIATHUMB01FREF0001 /* ClipboardMediaThumbnailCache.swift */,
 			);
@@ -674,6 +675,7 @@
 				14CEF41E2C5CAED400855D72 /* boringNotch.entitlements */,
 				14CEF41B2C5CAED400855D72 /* Preview Content */,
 				112FB72F2CCF12CC0015238C /* private */,
+				A1B2C3D4E5F60718293A4B01 /* Usage */,
 				11CC44A12CEE614100C7244B /* BoringViewCoordinator.swift */,
 			);
 			path = boringNotch;
@@ -903,6 +905,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				112FB72F2CCF12CC0015238C /* private */,
+				A1B2C3D4E5F60718293A4B01 /* Usage */,
 			);
 			name = boringNotch;
 			packageProductDependencies = (
@@ -1029,7 +1032,7 @@
 				P0C1A54B0F9D40D16D5DAE5A /* ClipboardCardView.swift in Sources */,
 				P0C1A0C5ACE94DE1E8FF63D0 /* ClipboardKeyboardMonitor.swift in Sources */,
 				P0C2E5F693DDC1C7EDF5D323 /* ClipboardHistoryView.swift in Sources */,
-				P0CTEXTPOPUP01BFILE000001 /* ClipboardTextPopupPanel.swift in Sources */,
+				P0CQLSUPPORT01BFILE000001 /* ClipboardQuickLookSupport.swift in Sources */,
 				P0CICONCACHE01BFILE000001 /* ClipboardIconCache.swift in Sources */,
 				P0CMEDIATHUMB01BFILE0001 /* ClipboardMediaThumbnailCache.swift in Sources */,
 				115C12EC2ED3D003009754CA /* OpenNotchHUD.swift in Sources */,
