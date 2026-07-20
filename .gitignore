@@ -1,0 +1,23 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Xcode user and build state
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.build/
+.swiftpm/
+
+# Xcode archives and products
+*.app
+*.dSYM
+*.ipa
+*.xcarchive
+
+# Temporary files
+*.log
+*.tmp
+*.swp
+*.swo
