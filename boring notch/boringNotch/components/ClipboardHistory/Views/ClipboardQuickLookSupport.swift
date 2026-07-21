@@ -51,20 +51,43 @@ enum ClipboardQuickLookSupport {
 
     // MARK: - Private
 
+    /// Always emit a plain UTF-8 `.txt` for Space preview.
+    ///
+    /// Preferring RTF/HTML made Quick Look use the rich-text generator, which
+    /// often paints a warm/brown paper background under dark app chrome.
+    /// Finder’s Space on a `.txt` file uses the system text generator instead —
+    /// white (light) / standard document dark (dark mode). Match that path.
     private static func textFallback(for item: HistoryItem) -> (urls: [URL], temporary: [URL]) {
-        if let data = item.rtfData, let url = writeTemp(data: data, filename: "Clipboard.rtf") {
-            return ([url], [url])
-        }
-        if let data = item.htmlData, let url = writeTemp(data: data, filename: "Clipboard.html") {
-            return ([url], [url])
-        }
-        let text = (item.text ?? item.previewableText)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = plainTextForQuickLook(item)
         guard !text.isEmpty else { return ([], []) }
+        if let url = writePlainTextTempFile(text) {
+            return ([url], [url])
+        }
+        // Last resort: TemporaryFileStorageService text helper
         if let url = TemporaryFileStorageService.shared.createTempFileSync(for: .text(text)) {
             return ([url], [url])
         }
         return ([], [])
+    }
+
+    /// Flatten clipboard payload to plain string (string → rtf → html → title).
+    private static func plainTextForQuickLook(_ item: HistoryItem) -> String {
+        if let t = item.text, !t.isEmpty {
+            return t
+        }
+        if let rtf = item.rtf, !rtf.string.isEmpty {
+            return rtf.string
+        }
+        if let html = item.html, !html.string.isEmpty {
+            return html.string
+        }
+        return item.previewableText
+    }
+
+    /// Write UTF-8 `.txt` the same way Finder would open a text clipping.
+    private static func writePlainTextTempFile(_ text: String) -> URL? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return writeTemp(data: data, filename: "Clipboard.txt")
     }
 
     private static func writeImageTempFile(for item: HistoryItem) -> URL? {

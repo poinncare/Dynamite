@@ -2,10 +2,10 @@
 //  QuickLookService.swift
 //  boringNotch
 //
-//  System Quick Look via QLPreviewPanel only (no SwiftUI .quickLookPreview —
-//  dual presentation was fighting over frame/size).
-//  Fixed square window, locked min=max, re-asserted after content swaps
-//  (keyboard browse must not thrash scale).
+//  System Quick Look via QLPreviewPanel.
+//  Media (images / video) is shown at its natural aspect ratio — no forced
+//  square window or letterbox “frames”. Window is fitted to content and capped
+//  by the screen, then left alone so QL does not thrash on browse.
 //
 
 import Foundation
@@ -13,6 +13,8 @@ import UniformTypeIdentifiers
 import SwiftUI
 import QuickLookUI
 import AppKit
+import AVFoundation
+import ImageIO
 
 @MainActor
 final class QuickLookService: ObservableObject {
@@ -26,7 +28,6 @@ final class QuickLookService: ObservableObject {
     func show(urls: [URL], selectFirst: Bool = true, slideshow: Bool = false) {
         guard !urls.isEmpty else { return }
 
-        // Scope new URLs first, then drop old scopes — avoids a gap while panel reloads.
         var newScoped: [URL] = []
         for url in urls where url.isFileURL {
             if url.startAccessingSecurityScopedResource() {
@@ -43,7 +44,6 @@ final class QuickLookService: ObservableObject {
         self.isQuickLookOpen = true
         self.selectedURL = selectFirst ? urls.first : (selectedURL.flatMap { urls.contains($0) ? $0 : nil } ?? urls.first)
 
-        // If already open, only swap items — keep the same locked square (no reopen).
         if host.isPanelVisible {
             host.reload(urls: urls)
             return
@@ -90,59 +90,138 @@ final class QuickLookService: ObservableObject {
     }
 }
 
-// MARK: - Fixed square (locked)
+// MARK: - Content-fit sizing (natural aspect ratio)
 
 enum QuickLookPanelSizing {
-    /// Constant outer size for every content type.
-    private static let preferredSide: CGFloat = 640
     private static let screenMargin: CGFloat = 48
-    private static let maxScreenFraction: CGFloat = 0.70
+    private static let maxScreenFraction: CGFloat = 0.78
+    /// Fallback when we cannot probe media size.
+    private static let fallbackSize = NSSize(width: 720, height: 480)
+    private static let minSize = NSSize(width: 280, height: 200)
 
-    static func squareSide(on screen: NSScreen) -> CGFloat {
-        let visible = screen.visibleFrame.insetBy(dx: screenMargin, dy: screenMargin)
-        let maxSide = min(visible.width, visible.height) * maxScreenFraction
-        return min(preferredSide, maxSide).rounded(.down)
+    /// Natural pixel size of the first previewable item, if known.
+    static func contentSize(for urls: [URL]) -> NSSize {
+        guard let url = urls.first else { return fallbackSize }
+        if let imageSize = imagePixelSize(url) {
+            return imageSize
+        }
+        if let videoSize = videoPixelSize(url) {
+            return videoSize
+        }
+        return fallbackSize
     }
 
-    static func preferredFrame(on screen: NSScreen) -> NSRect {
-        let s = squareSide(on: screen)
-        let visible = screen.visibleFrame
+    /// Frame that fits `content` into the screen while keeping aspect ratio.
+    static func preferredFrame(for urls: [URL], on screen: NSScreen) -> NSRect {
+        let visible = screen.visibleFrame.insetBy(dx: screenMargin, dy: screenMargin)
+        let maxW = max(minSize.width, visible.width * maxScreenFraction)
+        let maxH = max(minSize.height, visible.height * maxScreenFraction)
+
+        let raw = contentSize(for: urls)
+        let srcW = max(raw.width, 1)
+        let srcH = max(raw.height, 1)
+
+        let scale = min(maxW / srcW, maxH / srcH, 1.0) // never upscale beyond native
+        // For tiny assets still give a usable window; for huge ones scale down.
+        let fitScale = min(maxW / srcW, maxH / srcH)
+        let useScale = (srcW <= maxW && srcH <= maxH) ? min(1.0, fitScale) : fitScale
+
+        var w = (srcW * useScale).rounded(.down)
+        var h = (srcH * useScale).rounded(.down)
+        w = max(minSize.width, w)
+        h = max(minSize.height, h)
+        // If min size broke aspect, re-fit inside max box with min constraints.
+        if w > maxW || h > maxH {
+            let s2 = min(maxW / w, maxH / h)
+            w = (w * s2).rounded(.down)
+            h = (h * s2).rounded(.down)
+        }
+
+        // QL chrome (title bar / toolbar) — give a little extra height so content isn't clipped.
+        let chrome: CGFloat = 52
+        h = min(h + chrome, visible.height)
+
         return NSRect(
-            x: (visible.midX - s / 2).rounded(.down),
-            y: (visible.midY - s / 2).rounded(.down),
-            width: s,
-            height: s
+            x: (visible.midX - w / 2).rounded(.down),
+            y: (visible.midY - h / 2).rounded(.down),
+            width: w,
+            height: h
         )
     }
 
-    /// Apply fixed frame + hard min/max lock so QL cannot auto-resize to content.
-    static func lockSquare(on panel: QLPreviewPanel) {
+    /// Size panel to content aspect ratio. Does **not** force a square.
+    static func fitContent(on panel: QLPreviewPanel, urls: [URL]) {
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return }
-        let frame = preferredFrame(on: screen)
-        let size = frame.size
+        let frame = preferredFrame(for: urls, on: screen)
+        let visible = screen.visibleFrame.insetBy(dx: screenMargin, dy: screenMargin)
 
-        // Disable any in-flight frame animation, then pin size.
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
-        panel.minSize = size
-        panel.maxSize = size
+        // Soft bounds — allow QL internal layout, but never force square min=max.
+        panel.minSize = minSize
+        panel.maxSize = NSSize(width: visible.width, height: visible.height)
         panel.setFrame(frame, display: true, animate: false)
-        panel.minSize = size
-        panel.maxSize = size
         NSAnimationContext.endGrouping()
     }
 
-    /// True when the panel drifted away from our locked square.
-    static func needsRelock(_ panel: QLPreviewPanel) -> Bool {
+    static func needsRefit(_ panel: QLPreviewPanel, urls: [URL]) -> Bool {
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return false }
-        let expected = preferredFrame(on: screen)
+        let expected = preferredFrame(for: urls, on: screen)
         let f = panel.frame
-        return abs(f.width - expected.width) > 0.5
-            || abs(f.height - expected.height) > 0.5
-            || abs(f.origin.x - expected.origin.x) > 2
-            || abs(f.origin.y - expected.origin.y) > 2
+        // Generous tolerance — only refit when clearly wrong (e.g. still square 640²).
+        return abs(f.width - expected.width) > 24
+            || abs(f.height - expected.height) > 24
+    }
+
+    // MARK: Media probes
+
+    private static func imagePixelSize(_ url: URL) -> NSSize? {
+        guard let type = UTType(filenameExtension: url.pathExtension),
+              type.conforms(to: .image) || type.conforms(to: .rawImage) else {
+            // Still try ImageIO — some clipboard vault files are images without extension quirks
+            return imageIOPixelSize(url)
+        }
+        return imageIOPixelSize(url)
+    }
+
+    private static func imageIOPixelSize(_ url: URL) -> NSSize? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              CGImageSourceGetCount(src) > 0,
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else {
+            // Fallback NSImage
+            guard let img = NSImage(contentsOf: url), img.size.width > 0, img.size.height > 0 else {
+                return nil
+            }
+            return img.size
+        }
+        let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue
+            ?? (props[kCGImagePropertyPixelWidth] as? Double)
+        let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue
+            ?? (props[kCGImagePropertyPixelHeight] as? Double)
+        guard let w, let h, w > 0, h > 0 else { return nil }
+        return NSSize(width: w, height: h)
+    }
+
+    private static func videoPixelSize(_ url: URL) -> NSSize? {
+        guard let type = UTType(filenameExtension: url.pathExtension) else {
+            return videoTrackSize(url)
+        }
+        guard type.conforms(to: .movie) || type.conforms(to: .video) || type.conforms(to: .audiovisualContent) else {
+            return nil
+        }
+        return videoTrackSize(url)
+    }
+
+    private static func videoTrackSize(_ url: URL) -> NSSize? {
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .video).first else { return nil }
+        let nat = track.naturalSize.applying(track.preferredTransform)
+        let w = abs(nat.width)
+        let h = abs(nat.height)
+        guard w > 1, h > 1 else { return nil }
+        return NSSize(width: w, height: h)
     }
 }
 
@@ -160,13 +239,12 @@ final class QuickLookHostController {
     private var hostPanel: NSPanel?
     private let hostView = QuickLookHostView(frame: NSRect(x: 0, y: 0, width: 4, height: 4))
     private var visibilityTimer: Timer?
-    private var relockWorkItems: [DispatchWorkItem] = []
+    private var settleWorkItems: [DispatchWorkItem] = []
     private var revealWorkItem: DispatchWorkItem?
     private var onClose: (() -> Void)?
     private var isPresenting = false
-    /// True while swapping preview items; panel is hidden so auto-resize is invisible.
     private var isContentSwapping = false
-    private var resizeObserver: NSObjectProtocol?
+    private var currentURLs: [URL] = []
 
     var isPanelVisible: Bool {
         QLPreviewPanel.shared()?.isVisible == true
@@ -176,6 +254,7 @@ final class QuickLookHostController {
 
     func present(urls: [URL], onClose: @escaping () -> Void) {
         self.onClose = onClose
+        self.currentURLs = urls
         hostView.urls = urls
         hostView.onUserClosed = { [weak self] in
             self?.handleUserClosed()
@@ -195,7 +274,7 @@ final class QuickLookHostController {
 
         isPresenting = true
         isContentSwapping = true
-        cancelContentRelocks()
+        cancelSettle()
         revealWorkItem?.cancel()
 
         ql.updateController()
@@ -204,23 +283,21 @@ final class QuickLookHostController {
             ql.delegate = hostView
         }
 
-        // Appear invisible at locked size so first paint is never wrong-sized.
         ql.alphaValue = 0
-        QuickLookPanelSizing.lockSquare(on: ql)
+        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
 
         ql.currentPreviewItemIndex = 0
         ql.reloadData()
         ql.makeKeyAndOrderFront(nil)
 
-        QuickLookPanelSizing.lockSquare(on: ql)
-        observePanelResize(ql)
+        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
         startVisibilityWatch()
-        revealWhenStable(after: 0.08)
+        revealWhenStable(urls: urls, after: 0.08)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if let ql = QLPreviewPanel.shared(), ql.isVisible {
-                QuickLookPanelSizing.lockSquare(on: ql)
+                QuickLookPanelSizing.fitContent(on: ql, urls: urls)
             } else {
                 self.fallbackQLManage(urls: urls)
                 self.isPresenting = false
@@ -228,28 +305,24 @@ final class QuickLookHostController {
         }
     }
 
-    /// Swap preview items without a large-size flash.
-    /// Hides the panel for the duration of `reloadData()` auto-resize, then
-    /// re-shows only after the square lock is re-applied.
+    /// Swap items: hide → size to new content aspect → reload → show.
     func reload(urls: [URL]) {
+        currentURLs = urls
         hostView.urls = urls
         guard let ql = QLPreviewPanel.shared(), ql.isVisible || isPanelVisible else {
-            // Panel gone — present fresh if we still have a close handler.
-            if onClose != nil {
-                present(urls: urls, onClose: onClose!)
+            if let onClose {
+                present(urls: urls, onClose: onClose)
             }
             return
         }
 
         isContentSwapping = true
-        cancelContentRelocks()
+        cancelSettle()
         revealWorkItem?.cancel()
 
-        // Instant hide — any content-driven grow happens while invisible.
+        // Hide so intermediate auto-size is invisible.
         ql.alphaValue = 0
-        QuickLookPanelSizing.lockSquare(on: ql)
-        // Park off-screen as a second line of defense (some QL builds ignore alpha).
-        parkOffscreen(ql)
+        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
 
         if ql.dataSource == nil || ql.dataSource as AnyObject? !== hostView {
             ql.dataSource = hostView
@@ -261,21 +334,17 @@ final class QuickLookHostController {
         }
         ql.reloadData()
 
-        // Still invisible: pin square and move back to center.
-        QuickLookPanelSizing.lockSquare(on: ql)
-        observePanelResize(ql)
+        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
         startVisibilityWatch()
-        // Brief settle so the new preview's internal layout finishes under the lock.
-        revealWhenStable(after: 0.07)
+        revealWhenStable(urls: urls, after: 0.07)
     }
 
     func dismiss() {
         stopVisibilityWatch()
-        cancelContentRelocks()
+        cancelSettle()
         revealWorkItem?.cancel()
         revealWorkItem = nil
         isContentSwapping = false
-        stopResizeObserver()
         if let ql = QLPreviewPanel.shared(), ql.isVisible {
             ql.alphaValue = 1
             ql.orderOut(nil)
@@ -283,47 +352,36 @@ final class QuickLookHostController {
         clearPanelDataSource()
         hostPanel?.orderOut(nil)
         hostView.urls = []
+        currentURLs = []
         onClose = nil
     }
 
     private func handleUserClosed() {
         stopVisibilityWatch()
-        cancelContentRelocks()
+        cancelSettle()
         revealWorkItem?.cancel()
         revealWorkItem = nil
         isContentSwapping = false
-        stopResizeObserver()
         clearPanelDataSource()
         hostPanel?.orderOut(nil)
         hostView.urls = []
+        currentURLs = []
         let cb = onClose
         onClose = nil
         cb?()
     }
 
-    // MARK: - Size enforcement / flash-free reveal
+    // MARK: - Reveal
 
-    private func parkOffscreen(_ panel: QLPreviewPanel) {
-        let size = panel.frame.size
-        guard size.width > 0, size.height > 0 else { return }
-        let off = NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height)
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.current.duration = 0
-        panel.setFrame(off, display: false, animate: false)
-        NSAnimationContext.endGrouping()
-    }
-
-    /// Keep locking while hidden, then reveal only when the frame is the square.
-    private func revealWhenStable(after delay: TimeInterval) {
-        // Quiet re-locks while invisible (no visible thrash).
-        let lockDelays: [TimeInterval] = [0.0, 0.02, 0.04, 0.06]
-        for d in lockDelays {
+    private func revealWhenStable(urls: [URL], after delay: TimeInterval) {
+        let settleDelays: [TimeInterval] = [0.0, 0.03, 0.06]
+        for d in settleDelays {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.isContentSwapping else { return }
                 guard let ql = QLPreviewPanel.shared() else { return }
-                QuickLookPanelSizing.lockSquare(on: ql)
+                QuickLookPanelSizing.fitContent(on: ql, urls: urls)
             }
-            relockWorkItems.append(work)
+            settleWorkItems.append(work)
             DispatchQueue.main.asyncAfter(deadline: .now() + d, execute: work)
         }
 
@@ -334,97 +392,34 @@ final class QuickLookHostController {
                 self.isPresenting = false
                 return
             }
-            QuickLookPanelSizing.lockSquare(on: ql)
-            // If still wrong size, one more tick before reveal.
-            if QuickLookPanelSizing.needsRelock(ql) {
-                QuickLookPanelSizing.lockSquare(on: ql)
-            }
+            QuickLookPanelSizing.fitContent(on: ql, urls: urls)
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             ql.alphaValue = 1
             NSAnimationContext.endGrouping()
             self.isContentSwapping = false
             self.isPresenting = false
-            // Light tail locks after reveal, only if drift detected (keeps flash rare).
-            self.scheduleQuietTailLocks()
         }
         revealWorkItem = reveal
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: reveal)
     }
 
-    private func scheduleQuietTailLocks() {
-        let delays: [TimeInterval] = [0.12, 0.28, 0.5]
-        for delay in delays {
-            let work = DispatchWorkItem {
-                guard let ql = QLPreviewPanel.shared(), ql.isVisible else { return }
-                // Only correct if drifted — avoid setFrame spam when already square.
-                if QuickLookPanelSizing.needsRelock(ql) {
-                    // Correct invisibly: hide → lock → show in the same turn.
-                    let prev = ql.alphaValue
-                    ql.alphaValue = 0
-                    QuickLookPanelSizing.lockSquare(on: ql)
-                    ql.alphaValue = prev > 0 ? prev : 1
-                }
-            }
-            relockWorkItems.append(work)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
-        }
-    }
-
-    private func cancelContentRelocks() {
-        relockWorkItems.forEach { $0.cancel() }
-        relockWorkItems.removeAll()
-    }
-
-    private func observePanelResize(_ panel: QLPreviewPanel) {
-        stopResizeObserver()
-        resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: panel,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                guard let ql = QLPreviewPanel.shared(), ql.isVisible else { return }
-                guard QuickLookPanelSizing.needsRelock(ql) else { return }
-                if self.isContentSwapping {
-                    // Still hidden — just pin.
-                    QuickLookPanelSizing.lockSquare(on: ql)
-                } else {
-                    // Visible drift: hide for the correction so the user never
-                    // sees the oversized frame flash.
-                    ql.alphaValue = 0
-                    QuickLookPanelSizing.lockSquare(on: ql)
-                    ql.alphaValue = 1
-                }
-            }
-        }
-    }
-
-    private func stopResizeObserver() {
-        if let resizeObserver {
-            NotificationCenter.default.removeObserver(resizeObserver)
-            self.resizeObserver = nil
-        }
+    private func cancelSettle() {
+        settleWorkItems.forEach { $0.cancel() }
+        settleWorkItems.removeAll()
     }
 
     private func startVisibilityWatch() {
         stopVisibilityWatch()
-        visibilityTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+        visibilityTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 let visible = QLPreviewPanel.shared()?.isVisible == true
                 if !visible, !self.isPresenting, !self.isContentSwapping {
                     self.handleUserClosed()
-                    return
                 }
-                // Don't fight size while mid-swap (panel is hidden on purpose).
-                guard !self.isContentSwapping else { return }
-                if let ql = QLPreviewPanel.shared(), visible, QuickLookPanelSizing.needsRelock(ql) {
-                    ql.alphaValue = 0
-                    QuickLookPanelSizing.lockSquare(on: ql)
-                    ql.alphaValue = 1
-                }
+                // Intentionally do NOT re-force frame after reveal — user may resize,
+                // and we must not re-square or re-letterbox media.
             }
         }
     }
@@ -507,11 +502,13 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
         panel.dataSource = self
         panel.delegate = self
+        // Follow system appearance so text QL uses the same document background
+        // as Finder (not a tinted/brown paper look from forced dark chrome).
+        panel.appearance = NSApp.effectiveAppearance
         if panel.currentPreviewItemIndex < 0 || panel.currentPreviewItemIndex >= urls.count {
             panel.currentPreviewItemIndex = 0
         }
-        // Lock size only — no animated resize.
-        QuickLookPanelSizing.lockSquare(on: panel)
+        QuickLookPanelSizing.fitContent(on: panel, urls: urls)
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
@@ -539,7 +536,6 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
         return false
     }
 
-    /// Suppress zoom-from-source animation (was a source of size thrash).
     func previewPanel(_ panel: QLPreviewPanel!, sourceFrameOnScreenFor item: (any QLPreviewItem)!) -> NSRect {
         .zero
     }
@@ -548,19 +544,18 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
         nil
     }
 
-    /// Keep content view filling our locked square (prevents letterbox thrash).
+    /// Keep media aspect ratio — do not stretch to fill a foreign frame.
     func previewPanel(_ panel: QLPreviewPanel!, preserveAspectRatioFor item: (any QLPreviewItem)!) -> Bool {
         true
     }
 }
 
-// MARK: - SwiftUI helper (no longer presents QL itself)
+// MARK: - SwiftUI helper
 
 struct QuickLookPresenter: ViewModifier {
     @ObservedObject var service: QuickLookService
 
     func body(content: Content) -> some View {
-        // Intentionally no `.quickLookPreview` — AppKit QLPreviewPanel owns presentation.
         content
     }
 }
