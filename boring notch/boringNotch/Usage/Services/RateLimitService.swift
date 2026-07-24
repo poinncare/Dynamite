@@ -130,6 +130,20 @@ final class RateLimitService: ObservableObject {
         currentToken = token
         markFetching()
 
+        // CLI sessions can change while Pocket is running (for example after
+        // `codex login` or a browser sign-in). Keep the sandbox mirrors fresh
+        // before reading credentials so manual refresh actually uses the new
+        // session instead of the copy made at app launch.
+        await Task.detached(priority: .utility) {
+            Self.bootstrapCredentialMirrors()
+        }.value
+
+        if token.isCancelled {
+            isFetching = false
+            currentToken = nil
+            return
+        }
+
         let (claudeResult, codexResult, grokResult, grokConfigured) = await Task.detached(priority: .utility) {
             async let claude = ClaudeUsageFetcher.fetch(signal: token)
             async let codex = CodexUsageFetcher.fetch(signal: token)

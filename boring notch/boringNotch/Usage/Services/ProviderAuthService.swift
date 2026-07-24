@@ -315,9 +315,8 @@ enum ProviderAuthService {
 
     // MARK: - Launch (no .command / no Gatekeeper dialog)
 
-    /// Write a private `.sh` (never opened as a document) and run it via Terminal AppleScript.
-    /// When `hideTerminal` is true the window is miniaturized and Terminal is not activated,
-    /// so the user mainly sees the browser OAuth flow.
+    /// Write a private `.sh` (never opened as a document) and run it directly with Process.
+    /// This avoids any Terminal window (no spontaneous opening, no activate/miniaturize hacks).
     @discardableResult
     private static func launchAuthBridge(script: String, title: String, hideTerminal: Bool) -> Bool {
         let dir = FileManager.default.temporaryDirectory
@@ -337,49 +336,21 @@ enum ProviderAuthService {
                 ofItemAtPath: scriptURL.path
             )
         } catch {
-            return runViaAppleScript(inlineCommand: script, hideTerminal: hideTerminal)
+            return false
         }
 
         // Strip quarantine if present so zsh can execute; we never `open` this file as a document.
         stripQuarantine(at: scriptURL.path)
 
-        let path = scriptURL.path
-        let shellCommand = "/bin/zsh " + shellQuote(path)
-        return runViaAppleScript(inlineCommand: shellCommand, hideTerminal: hideTerminal)
-    }
-
-    private static func runViaAppleScript(inlineCommand: String, hideTerminal: Bool) -> Bool {
-        let escaped = inlineCommand
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-
-        let hideBlock: String
-        if hideTerminal {
-            hideBlock = """
-              try
-                set miniaturized of front window to true
-              end try
-            """
-        } else {
-            hideBlock = "activate"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = [scriptURL.path]
+        do {
+            try task.run()
+            return true
+        } catch {
+            return false
         }
-
-        let source = """
-        tell application "Terminal"
-          do script "\(escaped)"
-          \(hideBlock)
-        end tell
-        """
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: source) {
-            appleScript.executeAndReturnError(&error)
-            return error == nil
-        }
-        return false
-    }
-
-    private static func shellQuote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func stripQuarantine(at path: String) {

@@ -284,7 +284,6 @@ final class QuickLookHostController {
         }
 
         ql.alphaValue = 0
-        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
 
         ql.currentPreviewItemIndex = 0
         ql.reloadData()
