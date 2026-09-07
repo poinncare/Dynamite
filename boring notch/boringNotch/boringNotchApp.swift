@@ -5,6 +5,7 @@
 //  Created by Harsh Vardhan  Goswami  on 02/08/24.
 //
 
+import AppKit
 import Combine
 import Defaults
 import KeyboardShortcuts
@@ -12,50 +13,25 @@ import Sparkle
 import SwiftUI
 
 @main
-struct DynamicNotchApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @Default(.menubarIcon) var showMenuBarIcon
-    @Environment(\.openWindow) var openWindow
-
-    let updaterController: SPUStandardUpdaterController
-
-    init() {
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-
-        // Initialize the settings window controller with the updater controller
-        SettingsWindowController.shared.setUpdaterController(updaterController)
-    }
-
-    var body: some Scene {
-        MenuBarExtra("boring.notch", systemImage: "sparkle", isInserted: $showMenuBarIcon) {
-            Button("Settings") {
-                DispatchQueue.main.async {
-                    SettingsWindowController.shared.showWindow()
-                }
-            }
-            .keyboardShortcut(KeyEquivalent(","), modifiers: .command)
-            CheckForUpdatesView(updater: updaterController.updater)
-            Divider()
-            Button("Restart Boring Notch") {
-                ApplicationRelauncher.restart()
-            }
-            Button("Quit", role: .destructive) {
-                NSApplication.shared.terminate(self)
-            }
-            .keyboardShortcut(KeyEquivalent("Q"), modifiers: .command)
-        }
-    }
-}
-
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        application.setActivationPolicy(.accessory)
+        application.run()
+    }
+
     var statusItem: NSStatusItem?
     var windows: [String: NSWindow] = [:] // UUID -> NSWindow
     var viewModels: [String: BoringViewModel] = [:] // UUID -> BoringViewModel
     var window: NSWindow?
     let vm: BoringViewModel = .init()
-    @ObservedObject var coordinator = BoringViewCoordinator.shared
+    let coordinator = BoringViewCoordinator.shared
     var quickShareService = QuickShareService.shared
+    private var statusItemVisibilityCancellable: AnyCancellable?
+    private var updaterController: SPUStandardUpdaterController?
     var whatsNewWindow: NSWindow?
     var timer: Timer?
     var closeNotchTask: Task<Void, Never>?
@@ -66,6 +42,91 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isScreenLocked: Bool = false
     private var windowScreenDidChangeObserver: Any?
     private var dragDetectors: [String: DragDetector] = [:] // UUID -> DragDetector
+
+    private func setupMenuBarItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage(
+            systemSymbolName: "sparkle",
+            accessibilityDescription: "boring.notch"
+        )
+
+        let menu = NSMenu()
+        let settingsItem = NSMenuItem(
+            title: L("Settings"),
+            action: #selector(showSettingsFromMenu),
+            keyEquivalent: ","
+        )
+        settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let updateItem = NSMenuItem(
+            title: L("Check for Updates"),
+            action: #selector(checkForUpdatesFromMenu),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        menu.addItem(updateItem)
+        menu.addItem(.separator())
+
+        let restartItem = NSMenuItem(
+            title: L("Restart Boring Notch"),
+            action: #selector(restartFromMenu),
+            keyEquivalent: ""
+        )
+        restartItem.target = self
+        menu.addItem(restartItem)
+
+        let quitItem = NSMenuItem(
+            title: L("Quit"),
+            action: #selector(quitFromMenu),
+            keyEquivalent: "q"
+        )
+        quitItem.keyEquivalentModifierMask = .command
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        item.menu = menu
+        item.isVisible = Defaults[.menubarIcon]
+        statusItem = item
+
+        statusItemVisibilityCancellable = Defaults.publisher(.menubarIcon)
+            .sink { [weak self] change in
+                self?.statusItem?.isVisible = change.newValue
+            }
+    }
+
+    private func getUpdaterController() -> SPUStandardUpdaterController {
+        if let updaterController {
+            return updaterController
+        }
+
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+        updaterController = controller
+        SettingsWindowController.shared.setUpdaterController(controller)
+        return controller
+    }
+
+    @objc private func showSettingsFromMenu() {
+        SettingsWindowController.shared.setUpdaterController(getUpdaterController())
+        SettingsWindowController.shared.showWindow()
+    }
+
+    @objc private func checkForUpdatesFromMenu() {
+        getUpdaterController().updater.checkForUpdates()
+    }
+
+    @objc private func restartFromMenu() {
+        ApplicationRelauncher.restart()
+    }
+
+    @objc private func quitFromMenu() {
+        NSApplication.shared.terminate(nil)
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -81,7 +142,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DistributedNotificationCenter.default().removeObserver(observer)
             screenUnlockedObserver = nil
         }
-        MusicManager.shared.destroy()
         cleanupDragDetectors()
         cleanupWindows()
         XPCHelperClient.shared.stopMonitoringAccessibilityAuthorization()
@@ -279,6 +339,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+
+        setupMenuBarItem()
 
         NotificationCenter.default.addObserver(
             self,
