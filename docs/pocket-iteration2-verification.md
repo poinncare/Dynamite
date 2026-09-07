@@ -1,6 +1,6 @@
 # Pocket iteration 2 — независимая приёмка
 
-Проект: `/Users/user/Dev/vibecode/Pocket/boring notch`  
+Проект: `/Users/user/Dev/vibecode/Pocket/Dynamite`  
 Спека: `docs/pocket-iteration2-spec.md` § Приёмка (1–8) + i18n  
 Отчёты исполнителя: `.orca/iteration2-report.md`, `.orca/i18n-complete-report.md` (факты перепроверены)
 
@@ -10,12 +10,12 @@
 
 ## 1. Чистая сборка — PASS
 ```
-DEVELOPER_DIR=... xcodebuild -project boringNotch.xcodeproj -scheme boringNotch \
+DEVELOPER_DIR=... xcodebuild -project Dynamite.xcodeproj -scheme Dynamite \
   -configuration Debug -destination platform=macOS -derivedDataPath /tmp/pocket-verify3-dd build
 ```
 Exit 0. Хвост:
 ```
-Validate /tmp/pocket-verify3-dd/Build/Products/Debug/boringNotch.app
+Validate /tmp/pocket-verify3-dd/Build/Products/Debug/Dynamite.app
 ...
 ** BUILD SUCCEEDED **
 ```
@@ -24,11 +24,11 @@ Validate /tmp/pocket-verify3-dd/Build/Products/Debug/boringNotch.app
 | Проверка | Факт |
 |---|---|
 | UI поиска | `ClipboardHistoryView` — нет TextField/search bar; full-height cards (`:59-72`, body only strip) |
-| `isSearchFocused` | `rg` по `boringNotch` → **0** совпадений |
+| `isSearchFocused` | `rg` по `Dynamite` → **0** совпадений |
 | Residual (замечание) | `ClipboardHistoryManager.searchQuery` + `applySearch` + `ClipboardSearch.swift`/`fuse` ещё в target (пустой query → all items). Не isSearchFocused; dead-ish backend. Спека допускает оставить fuse. |
 
 ## 3. Хоткей = toggle, без 3с autoclose — PASS
-`boringNotchApp.swift:413-447`:
+`DynamiteApp.swift:413-447`:
 - `closeNotchTask?.cancel(); closeNotchTask = nil` — **нет** sleep(3) (в отличие от `toggleNotchOpen` `:396-404`)
 - closed → `currentView = .clipboard` + `open()`
 - open + clipboard → `close()`
@@ -91,7 +91,7 @@ Runtime ⌘-hold screenshot: **НЕПРОВЕРЯЕМО** (как у испол�
 ---
 
 ## Smoke — PASS
-`open /tmp/pocket-verify3-dd/.../boringNotch.app` — process alive ≥5s (PID observed), kill clean.
+`open /tmp/pocket-verify3-dd/.../Dynamite.app` — process alive ≥5s (PID observed), kill clean.
 
 ## Screenshot acceptance (п.9) — PASS partial
 - `docs/clipboard-ui-iter2.png` exists, matches layout claims

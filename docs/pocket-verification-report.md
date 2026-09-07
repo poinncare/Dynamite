@@ -1,9 +1,9 @@
 # Pocket — независимая приёмка (verification)
 
 Дата: 2026-07-20  
-Проект: `/Users/user/Dev/vibecode/Pocket/boring notch`  
+Проект: `/Users/user/Dev/vibecode/Pocket/Dynamite`  
 Спека: `docs/pocket-spec.md` § «Приёмка»  
-Отчёт исполнителя: `boring notch/.orca/implementation-report.md` (перепроверен, не принят на слово)
+Отчёт исполнителя: `Dynamite/.orca/implementation-report.md` (перепроверен, не принят на слово)
 
 **Итоговый вердикт: ПРИНЯТЬ С ЗАМЕЧАНИЯМИ**
 
@@ -13,10 +13,10 @@
 
 ## 1) Чистая сборка
 
-Команда (из корня `boring notch`):
+Команда (из корня `Dynamite`):
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcodebuild -project boringNotch.xcodeproj -scheme boringNotch \
+  xcodebuild -project Dynamite.xcodeproj -scheme Dynamite \
   -configuration Debug -destination 'platform=macOS' \
   -derivedDataPath /tmp/pocket-verify-dd build
 ```
@@ -25,14 +25,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Последние строки:
 ```
-Validate /tmp/pocket-verify-dd/Build/Products/Debug/boringNotch.app ...
-Touch /tmp/pocket-verify-dd/Build/Products/Debug/boringNotch.app ...
-RegisterWithLaunchServices ... boringNotch.app
+Validate /tmp/pocket-verify-dd/Build/Products/Debug/Dynamite.app ...
+Touch /tmp/pocket-verify-dd/Build/Products/Debug/Dynamite.app ...
+RegisterWithLaunchServices ... Dynamite.app
 note: Disabling hardened runtime with ad-hoc codesigning.
 ** BUILD SUCCEEDED **
 ```
 
-Продукт: `/tmp/pocket-verify-dd/Build/Products/Debug/boringNotch.app`  
+Продукт: `/tmp/pocket-verify-dd/Build/Products/Debug/Dynamite.app`  
 SPM resolved: KeyboardShortcuts **2.3.0**, Sauce **2.4.1**, fuse-swift **1.4.0**, Defaults 9.0.6; MacroVisionKit local Vendor.
 
 | Пункт | Вердикт |
@@ -46,17 +46,17 @@ SPM resolved: KeyboardShortcuts **2.3.0**, Sauce **2.4.1**, fuse-swift **1.4.0**
 ### 2. Вкладка clipboard
 | Требование | Координаты | Вердикт |
 |---|---|---|
-| `NotchViews.clipboard` | `boringNotch/enums/generic.swift:27-30` | **PASS** |
+| `NotchViews.clipboard` | `Dynamite/enums/generic.swift:27-30` | **PASS** |
 | TabSelectionView | `TabSelectionView.swift:17-20` — TabModel Clipboard `doc.on.clipboard` | **PASS** |
 | ContentView switch | `ContentView.swift:357-363` — `case .clipboard: ClipboardHistoryView()` | **PASS** |
 
 ### 3. Ядро: poll / SwiftData / dedup / limit / pin / delete / clear
 | Требование | Координаты | Вердикт |
 |---|---|---|
-| Старт поллинга из AppDelegate при enabled | `boringNotchApp.swift:443-447` — `if Defaults[.clipboardEnabled] { ClipboardHistoryManager.shared.start() }` | **PASS** |
+| Старт поллинга из AppDelegate при enabled | `DynamiteApp.swift:443-447` — `if Defaults[.clipboardEnabled] { ClipboardHistoryManager.shared.start() }` | **PASS** |
 | start → Timer | `ClipboardHistoryManager.swift:28-40` → `ClipboardService.start()`; timer `ClipboardService.swift:52-63` interval `Defaults[.clipboardCheckInterval]` | **PASS** |
 | Типы string/rtf/html/png/tiff/fileURL | supported `ClipboardService.swift:24-26`; default enabled `Constants.swift:181-183` + `ClipboardStorageType.all`; запись `contents.append` `ClipboardService.swift:175-176` | **PASS** |
-| SwiftData storage path | `ClipboardStorage.swift:26-33` → `Application Support/boringNotch/ClipboardHistory.sqlite`; models `HistoryItem`/`HistoryItemContent` | **PASS** |
+| SwiftData storage path | `ClipboardStorage.swift:26-33` → `Application Support/Dynamite/ClipboardHistory.sqlite`; models `HistoryItem`/`HistoryItemContent` | **PASS** |
 | supersedes dedup | `HistoryItem.supersedes` `HistoryItem.swift:41-49`; `findSimilarItem` `ClipboardHistoryManager.swift:258-263`; merge+delete existing `94-109` | **PASS** |
 | limit unpinned | `limitHistorySize` `ClipboardHistoryManager.swift:247-256`; default 200 `Constants.swift:178` | **PASS** |
 | pin/unpin | `togglePin` `ClipboardHistoryManager.swift:145-154` pin=`"•"`; UI context menu `ClipboardCardView.swift:48` | **PASS** |
@@ -77,14 +77,14 @@ SPM resolved: KeyboardShortcuts **2.3.0**, Sauce **2.4.1**, fuse-swift **1.4.0**
 | Стрелки + WASD | `ClipboardKeyboardMonitor.swift:84-115`; move → `manager.moveSelection` `ClipboardHistoryView.swift:128-129` | **PASS** (код) |
 | Enter=paste, Delete=delete, Escape=close | `56-65`, handlers `131-139` | **PASS** (код) |
 | WASD не перехват при фокусе поиска | `setSearchFocused` `31-32` / `23-25`; early return `76-78` если search focused && !arrow | **PASS** (код) |
-| canBecomeKey + makeKey | `BoringNotchSkyLightWindow.swift:36-37,89-96,125`; post `.clipboardTabKeyFocus` `ClipboardHistoryView.swift:151-157`; cleanup `ContentView.swift:169-178` | **PASS** (код) |
+| canBecomeKey + makeKey | `DynamiteSkyLightWindow.swift:36-37,89-96,125`; post `.clipboardTabKeyFocus` `ClipboardHistoryView.swift:151-157`; cleanup `ContentView.swift:169-178` | **PASS** (код) |
 | Runtime key delivery | Local monitor only (`addLocalMonitorForEvents`) — **без** global/CGEvent-tap fallback из спеки | **НЕПРОВЕРЯЕМО ЗДЕСЬ** (нет GUI-автоматизации); риск: local monitor может не получать keyDown, если app/window не key |
 
 ### 6. Хоткей Cmd+Shift+C
 | Требование | Координаты | Вердикт |
 |---|---|---|
 | Default shortcut | `ShortcutConstants.swift:12` — `.c` + shift+command | **PASS** |
-| Handler opens notch on clipboard tab | `boringNotchApp.swift:413-440` — `currentView = .clipboard` + `viewModel.open()` | **PASS** (код) |
+| Handler opens notch on clipboard tab | `DynamiteApp.swift:413-440` — `currentView = .clipboard` + `viewModel.open()` | **PASS** (код) |
 | Runtime hotkey | — | **НЕПРОВЕРЯЕМО ЗДЕСЬ** (нужен живой GUI + Accessibility/KeyboardShortcuts) |
 
 ---
@@ -111,14 +111,14 @@ SPM resolved: KeyboardShortcuts **2.3.0**, Sauce **2.4.1**, fuse-swift **1.4.0**
 ## 4) Smoke
 
 ```
-open /tmp/pocket-verify-dd/Build/Products/Debug/boringNotch.app
+open /tmp/pocket-verify-dd/Build/Products/Debug/Dynamite.app
 # wait 5s
 ```
 
 Наблюдение:
-- PID `boringNotch` жив ≥5s (state S), путь `/private/tmp/pocket-verify-dd/.../boringNotch`
+- PID `Dynamite` жив ≥5s (state S), путь `/private/tmp/pocket-verify-dd/.../Dynamite`
 - XPC helper + mediaremote-adapter.pl тоже живы
-- kill -9 по имени `boringNotch` — чисто
+- kill -9 по имени `Dynamite` — чисто
 
 | Приёмка 7 (запуск без крэша) | **PASS** (smoke ≥5s) |
 | Шторка отображается | **НЕПРОВЕРЯЕМО ЗДЕСЬ** (menubar/notch, нет визуальной проверки) |
@@ -134,7 +134,7 @@ open /tmp/pocket-verify-dd/Build/Products/Debug/boringNotch.app
 | D3 | Low | **`ClipboardAccessibility.requestIfNeeded()`** (`ClipboardAccessibility.swift:18-21`) **нигде не вызывается**. `check()` не промптает. Paste без AX может молча noop (как Maccy). |
 | D4 | Low/Port | Потеря Maccy: `ignoreEvents`, `ignoreAllAppsExceptListed`, `sessionLog`/modified. |
 | D5 | Risk | Только **local** key monitor; fallback global/CGEvent tap из спеки **не реализован**. Cleanup monitor OK: `stop()` + `removeMonitor`, `[weak self]` — **retain-цикла монитора нет**. Timer `target: self` на singleton — OK при `stop()`. |
-| D6 | Nit | `BoringNotchWindow.canBecomeKey` всегда false (`BoringNotchWindow.swift:43-45`); фактическое окно — SkyLight — OK. |
+| D6 | Nit | `DynamiteWindow.canBecomeKey` всегда false (`DynamiteWindow.swift:43-45`); фактическое окно — SkyLight — OK. |
 | D7 | Nit | `clipboardPasteAutomatically` label vs behavior mismatch; 2-row cards not implemented (reported by executor, height OK). |
 
 Заглушек типа `// TODO` / empty stub handlers в clipboard path **не найдено**. Handlers Enter/Delete/Escape/WASD **привязаны** в `setupKeyboard` при `onAppear` вкладки — не «мёртвые» callbacks.

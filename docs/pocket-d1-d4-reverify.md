@@ -1,16 +1,16 @@
 # Re-verify D1–D4 (acceptance fixes)
 
-Project: `boring notch` | Independent code check + clean build. Nothing modified.
+Project: `Dynamite` | Independent code check + clean build. Nothing modified.
 
 ## Build
 ```
-DEVELOPER_DIR=... xcodebuild -project boringNotch.xcodeproj -scheme boringNotch \
+DEVELOPER_DIR=... xcodebuild -project Dynamite.xcodeproj -scheme Dynamite \
   -configuration Debug -destination platform=macOS -derivedDataPath /tmp/pocket-verify2-dd build
 ```
 Exit 0. Tail:
 ```
-Validate /tmp/pocket-verify2-dd/Build/Products/Debug/boringNotch.app ...
-Touch .../boringNotch.app
+Validate /tmp/pocket-verify2-dd/Build/Products/Debug/Dynamite.app ...
+Touch .../Dynamite.app
 RegisterWithLaunchServices ...
 note: Disabling hardened runtime with ad-hoc codesigning.
 ** BUILD SUCCEEDED **

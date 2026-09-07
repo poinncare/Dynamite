@@ -9,7 +9,7 @@
 
 | Источник                                                     | Роль                                                         |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| [boring.notch](https://github.com/theboredteam/boring.notch) | Основа приложения (`boring notch/`)                          |
+| [Dynamite](https://github.com/poinncare/Dynamite)          | Основа приложения (`DynamiteApp/`)                       |
 | [Maccy](https://github.com/p0deje/Maccy)                     | Донор ядра буфера обмена (только читать; UI не портируем)    |
 | [CodexBar](https://github.com/steipete/CodexBar)             | Планируемая вкладка usage AI-подписок (ещё не интегрирована) |
 
@@ -20,25 +20,25 @@
 
 1. Собрать Debug:
   ```bash
-   cd "boring notch"
+   cd "DynamiteApp"
    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-     xcodebuild -project boringNotch.xcodeproj -scheme boringNotch \
+   xcodebuild -project Dynamite.xcodeproj -scheme Dynamite \
      -configuration Debug -destination 'platform=macOS' \
      -derivedDataPath "../build/DerivedData" build
   ```
 2. Задеплоить в `/Applications` и перезапустить:
   ```bash
-   APP_SRC="../build/DerivedData/Build/Products/Debug/boringNotch.app"
-   APP_DST="/Applications/boringNotch.app"
-   pkill -x boringNotch 2>/dev/null || true
+   APP_SRC="../build/DerivedData/Build/Products/Debug/Dynamite.app"
+   APP_DST="/Applications/Dynamite.app"
+   pkill -x Dynamite 2>/dev/null || true
    rm -rf "$APP_DST"
    ditto "$APP_SRC" "$APP_DST"
    xattr -cr "$APP_DST" 2>/dev/null || true
    open "$APP_DST"
   ```
-3. Убедиться, что процесс жив (`pgrep -x boringNotch`).
+3. Убедиться, что процесс жив (`pgrep -x Dynamite`).
 
-Пользователь смотрит `**/Applications/boringNotch.app**`, не build product из DerivedData.
+Пользователь смотрит `**/Applications/Dynamite.app**`, не build product из DerivedData.
 
 ## Вкладки шторки
 
@@ -54,6 +54,4 @@
 ## Границы
 
 **Не** commit/push/PR без явной просьбы пользователя.
-
-
 

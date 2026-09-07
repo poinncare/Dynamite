@@ -25,7 +25,7 @@ Nothing modified. Facts vs code.
 - Nav blocked: monitor `:97-107` + `onMove` guard `:186-188`
 - pbxproj Sources: `ClipboardTextPopupPanel.swift` registered (IDs P0CTEXTPOPUP*)
 
-## 5) /Applications/boringNotch.app freshness — PASS
+## 5) /Applications/Dynamite.app freshness — PASS
 - Today 2026-07-20
 - Bundle mtime **16:53**, binary **17:08** (both after 14:00)
 

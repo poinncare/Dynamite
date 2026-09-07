@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+	<key>com.apple.security.files.bookmarks.document-scope</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- MediaRemoteAdapter is a bundled local framework without a developer Team ID. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.spotify.client</string>
+		<string>com.apple.Music</string>
+		<string>com.apple.Terminal</string>
+	</array>
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
+	<!-- Agent detection + AI usage: read CLI install dirs and auth files (Orca/CodexBar parity) -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/.claude/</string>
+		<string>/.codex/</string>
+		<string>/.grok/</string>
+		<string>/.config/</string>
+		<string>/.local/</string>
+		<string>/.nvm/</string>
+		<string>/.volta/</string>
+		<string>/.asdf/</string>
+		<string>/.fnm/</string>
+		<string>/.bun/</string>
+		<string>/.yarn/</string>
+		<string>/.cursor/</string>
+		<string>/Library/pnpm/</string>
+		<string>/.gemini/</string>
+		<string>/.npm/</string>
+	</array>
+	<!-- Persist refreshed OAuth tokens + exported sessions so providers do not drop after restart/expiry -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Application Support/Dynamite/</string>
+		<string>/.claude/</string>
+		<string>/.codex/</string>
+		<string>/.grok/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/opt/homebrew/bin/</string>
+		<string>/opt/homebrew/sbin/</string>
+		<string>/usr/local/bin/</string>
+		<string>/usr/local/sbin/</string>
+		<string>/usr/bin/</string>
+		<string>/bin/</string>
+	</array>
+</dict>
+</plist>

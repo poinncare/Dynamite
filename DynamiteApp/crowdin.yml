@@ -1,0 +1,4 @@
+files:
+  - source: /Dynamite/Localizable.xcstrings
+    translation: /Dynamite/Localizable.xcstrings
+    multilingual: 1

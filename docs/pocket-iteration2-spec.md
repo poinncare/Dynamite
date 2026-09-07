@@ -1,6 +1,6 @@
 # Pocket — итерация 2 (по фидбеку пользователя)
 
-Рабочая директория: `/Users/user/Dev/vibecode/Pocket/boring notch` (единственный владелец записи).
+Рабочая директория: `/Users/user/Dev/vibecode/Pocket/Dynamite` (единственный владелец записи).
 Референс дизайна: скриншот Pasta `/Users/user/Dev/vibecode/Pocket/docs/pasta-reference.png` — смотреть при вёрстке карточек/футера/попапа.
 
 ## 1. Локализация настроек + выбор языка
@@ -10,7 +10,7 @@
 - Русские переводы писать самому, аккуратные и краткие.
 
 ## 2. Хоткей = toggle
-- Cmd+Shift+C (clipboardHistoryPanel): если шторка закрыта — открыть на вкладке clipboard; если шторка УЖЕ открыта на вкладке clipboard — закрыть (`vm.close()`). Если открыта на другой вкладке — переключить на clipboard, не закрывая. Обработчик: `boringNotchApp.swift:413-440`.
+- Cmd+Shift+C (clipboardHistoryPanel): если шторка закрыта — открыть на вкладке clipboard; если шторка УЖЕ открыта на вкладке clipboard — закрыть (`vm.close()`). Если открыта на другой вкладке — переключить на clipboard, не закрывая. Обработчик: `DynamiteApp.swift:413-440`.
 - Убрать/не применять автозакрытие через 3с для этого хоткея, если оно мешает (как у toggleNotchOpen App:396-404 — проверить, не наследуется ли).
 
 ## 3. Пробел = попап полного текста (как в Pasta)
@@ -43,7 +43,7 @@
 - Не менять Home/Shelf/медиа-функции. Не трогать репозиторий Maccy. Без git-коммитов.
 
 ## Приёмка
-1. Чистая сборка: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project boringNotch.xcodeproj -scheme boringNotch -configuration Debug -destination platform=macOS build` → BUILD SUCCEEDED.
+1. Чистая сборка: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Dynamite.xcodeproj -scheme Dynamite -configuration Debug -destination platform=macOS build` → BUILD SUCCEEDED.
 2. Поле поиска отсутствует; в коде нет мёртвых isSearchFocused-веток.
 3. Хоткей — toggle (код: обработчик закрывает при открытой clipboard-вкладке).
 4. Space-попап реализован; Escape/Space закрывают; навигация под попапом заблокирована.
