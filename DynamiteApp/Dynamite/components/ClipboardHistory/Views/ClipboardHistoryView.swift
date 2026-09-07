@@ -31,11 +31,14 @@ struct ClipboardHistoryView: View {
     // MARK: Card geometry
     private let cardSpacing: CGFloat = 8
     private let cornerRadius: CGFloat = 10
-    private let outerHorizontalPadding: CGFloat = 10
+    // Match the bottom edge: no extra horizontal frame around the card strip.
+    private let outerHorizontalPadding: CGFloat = 0
     // Shelf's reference tile fills the complete content height; Clipboard
     // uses the same vertical geometry so its square is exactly 140×140.
     private let bottomSafe: CGFloat = 0
     private let topSafe: CGFloat = 0
+    // Tiny inset keeps the selected outline clear of the notch mask without
+    // bringing back the visibly thick side frame.
     private let stripHorizontalInset: CGFloat = 2
 
     private var isQuickLookVisible: Bool {
@@ -149,12 +152,16 @@ struct ClipboardHistoryView: View {
                     .padding(.horizontal, stripHorizontalInset)
                 }
                 .scrollIndicators(.never)
+                .onAppear {
+                    scrollStripToLeading(proxy)
+                }
                 .onChange(of: manager.selectedIndex) { _, newValue in
                     guard manager.visibleItems.indices.contains(newValue) else { return }
                     // Keyboard navigation must remain synchronous. Animating a
                     // second ScrollView transaction for every repeated arrow
                     // key made the notch feel one step behind the selection.
-                    proxy.scrollTo(manager.visibleItems[newValue].persistentModelID, anchor: .center)
+                    let anchor: UnitPoint = newValue == 0 ? .leading : .center
+                    proxy.scrollTo(manager.visibleItems[newValue].persistentModelID, anchor: anchor)
                 }
                 .onChange(of: copyPhase) { _, phase in
                     if phase == .flying, let first = manager.visibleItems.first {
@@ -163,6 +170,25 @@ struct ClipboardHistoryView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private func scrollStripToLeading(_ proxy: ScrollViewProxy) {
+        guard let first = manager.visibleItems.first else { return }
+
+        // Reset both the reused ScrollView offset and the first keyboard
+        // selection without introducing a visible horizontal animation.
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            proxy.scrollTo(first.persistentModelID, anchor: .leading)
+        }
+        DispatchQueue.main.async {
+            var deferredTransaction = Transaction()
+            deferredTransaction.animation = nil
+            withTransaction(deferredTransaction) {
+                proxy.scrollTo(first.persistentModelID, anchor: .leading)
             }
         }
     }
