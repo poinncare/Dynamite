@@ -28,8 +28,8 @@
 - Заменяемый системный HUD для громкости, яркости и подсветки клавиатуры.
 
 <p align="center">
-  <img src="DynamiteApp/docs/clipboard-ui-iter7-home.png" alt="Главный экран Dynamite" width="48%">
-  <img src="DynamiteApp/docs/clipboard-ui-iter7-clip.png" alt="История буфера обмена Dynamite" width="48%">
+  <img src="docs/dynamite-shelf.jpg" alt="Файловая полка Dynamite" width="48%">
+  <img src="docs/dynamite-usage.jpg" alt="Usage AI-сервисов в Dynamite" width="48%">
 </p>
 
 ## Установка
