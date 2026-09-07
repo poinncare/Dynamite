@@ -39,7 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenLockedObserver: Any?
     private var screenUnlockedObserver: Any?
     private var isScreenLocked: Bool = false
-    private var windowScreenDidChangeObserver: Any?
+    private var windowScreenDidChangeObservers: [String: NSObjectProtocol] = [:]
     private var dragDetectors: [String: DragDetector] = [:] // UUID -> DragDetector
 
     private func setupMenuBarItem() {
@@ -139,6 +139,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MusicManager.shared.destroy()
+        RateLimitService.shared.stop()
+        AgentDetectionService.shared.stop()
+        ClipboardKeyboardMonitor.shared.stop()
+        ClipboardService.shared.stop()
         NotificationCenter.default.removeObserver(self)
         if let observer = screenLockedObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
@@ -222,12 +227,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let window = window {
             window.close()
             NotchSpaceManager.shared.notchSpace.windows.remove(window)
-            if let obs = windowScreenDidChangeObserver {
-                NotificationCenter.default.removeObserver(obs)
-                windowScreenDidChangeObserver = nil
-            }
             self.window = nil
         }
+        removeWindowScreenChangeObservers()
+    }
+
+    private func removeWindowScreenChangeObservers() {
+        windowScreenDidChangeObservers.values.forEach { observer in
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windowScreenDidChangeObservers.removeAll()
     }
 
     private func cleanupDragDetectors() {
@@ -288,11 +297,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let uuid = screen.displayUUID else { return }
         
         if Defaults[.showOnAllDisplays], let viewModel = viewModels[uuid] {
-            viewModel.open()
-            coordinator.currentView = .shelf
+            viewModel.open(to: .shelf)
         } else if !Defaults[.showOnAllDisplays], let windowScreen = window?.screen, screen == windowScreen {
-            vm.open()
-            coordinator.currentView = .shelf
+            vm.open(to: .shelf)
         }
     }
 
@@ -317,13 +324,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
         NotchSpaceManager.shared.notchSpace.windows.insert(window)
 
-        // Observe when the window's screen changes so we can update drag detectors
-        windowScreenDidChangeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didChangeScreenNotification,
-            object: window,
-            queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    self?.setupDragDetectors()
+        // Observe when the window's screen changes so we can update drag detectors.
+        // Keep one token per display; a single token used to overwrite the
+        // previous one in multi-display mode and leak observers.
+        if let uuid = screen.displayUUID {
+            if let previous = windowScreenDidChangeObservers.removeValue(forKey: uuid) {
+                NotificationCenter.default.removeObserver(previous)
+            }
+            windowScreenDidChangeObservers[uuid] = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeScreenNotification,
+                object: window,
+                queue: .main) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.setupDragDetectors()
+                    }
                 }
         }
         return window
@@ -347,6 +361,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
 
         setupMenuBarItem()
+        // Start Sparkle during application launch so startup checks and the
+        // GitHub appcast work even when Settings has never been opened.
+        _ = getUpdaterController()
 
         NotificationCenter.default.addObserver(
             self,
@@ -371,6 +388,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.adjustWindowPosition()
                 self?.setupDragDetectors()
             }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name.notchInteraction, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.closeNotchTask?.cancel()
+            self?.closeNotchTask = nil
         }
 
         NotificationCenter.default.addObserver(
@@ -589,8 +613,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let currentScreenUUIDs = Set(NSScreen.screens.compactMap { $0.displayUUID })
 
             // Remove windows for screens that no longer exist
-            for uuid in windows.keys where !currentScreenUUIDs.contains(uuid) {
+            for uuid in windows.keys.filter({ !currentScreenUUIDs.contains($0) }) {
                 if let window = windows[uuid] {
+                    if let observer = windowScreenDidChangeObservers.removeValue(forKey: uuid) {
+                        NotificationCenter.default.removeObserver(observer)
+                    }
                     window.close()
                     NotchSpaceManager.shared.notchSpace.windows.remove(window)
                     windows.removeValue(forKey: uuid)
@@ -708,6 +735,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension Notification.Name {
+    static let notchInteraction = Notification.Name("notchInteraction")
     static let selectedScreenChanged = Notification.Name("SelectedScreenChanged")
     static let notchHeightChanged = Notification.Name("NotchHeightChanged")
     static let showOnAllDisplaysChanged = Notification.Name("showOnAllDisplaysChanged")

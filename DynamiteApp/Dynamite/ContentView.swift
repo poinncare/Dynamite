@@ -16,8 +16,12 @@ import SwiftUIIntrospect
 struct ContentView: View {
     @EnvironmentObject var vm: BoringViewModel
     @ObservedObject var coordinator = BoringViewCoordinator.shared
-    @ObservedObject var musicManager = MusicManager.shared
+    // Observe only coarse media activity here. The detailed player state is
+    // consumed by the small closed-activity view below, so progress ticks do
+    // not rebuild the entire notch and all of its tabs.
+    @ObservedObject private var musicLayout = MusicLayoutState.shared
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
+    @ObservedObject private var accentColor = AccentColorStore.shared
     @State private var hoverTask: Task<Void, Never>?
     @State private var isHovering: Bool = false
     @State private var anyDropDebounceTask: Task<Void, Never>?
@@ -61,12 +65,12 @@ struct ContentView: View {
         {
             chinWidth = 640
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
-            && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
+            && vm.notchState == .closed && musicLayout.isActive
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
         {
             chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
         } else if !coordinator.expandingView.show && vm.notchState == .closed
-            && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace]
+            && !musicLayout.isActive && Defaults[.showNotHumanFace]
             && !vm.hideOnClosed
         {
             chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
@@ -76,6 +80,8 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // Keep the whole notch tree subscribed to custom accent changes.
+        let _ = accentColor.revision
         // Calculate scale based on gesture progress only
         let gestureScale: CGFloat = {
             guard gestureProgress != 0 else { return 1.0 }
@@ -174,15 +180,22 @@ struct ContentView: View {
                         }
                     }
                     .onChange(of: coordinator.currentView) { _, newView in
-                        if newView == .clipboard {
-                            // Every entry (click / ⌘3 / ⌘⇧[]): re-activate handlers + key focus.
-                            // ClipboardHistoryView listens and rebinds callbacks (onAppear may race with transition).
-                            NotificationCenter.default.post(name: .clipboardTabDidActivate, object: nil)
-                            NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: true)
-                        } else {
-                            // Drop clipboard-only handlers; keep notch-wide ⌘ session + key focus
-                            ClipboardKeyboardMonitor.shared.disableClipboardHandlers()
-                            NotificationCenter.default.post(name: .clipboardRequestCloseQuickLook, object: nil)
+                        // Do not run focus/Quick Look work inside SwiftUI's
+                        // state-mutation transaction. A tab switch must first
+                        // commit the new view; side effects can then execute
+                        // on the next run-loop turn without re-entering layout.
+                        DispatchQueue.main.async {
+                            guard self.coordinator.currentView == newView else { return }
+                            if newView == .clipboard {
+                                // Every entry (click / ⌘3 / ⌘⇧[]): re-activate handlers + key focus.
+                                // ClipboardHistoryView listens and rebinds callbacks (onAppear may race with transition).
+                                NotificationCenter.default.post(name: .clipboardTabDidActivate, object: nil)
+                                NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: true)
+                            } else {
+                                // Drop clipboard-only handlers; keep notch-wide ⌘ session + key focus
+                                ClipboardKeyboardMonitor.shared.disableClipboardHandlers()
+                                NotificationCenter.default.post(name: .clipboardRequestCloseQuickLook, object: nil)
+                            }
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .notchRequestClose)) { _ in
@@ -309,10 +322,13 @@ struct ContentView: View {
                       } else if coordinator.sneakPeek.show && Defaults[.inlineHUD] && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
-                      } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
-                          MusicLiveActivity()
+                      } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && musicLayout.isActive && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
+                          ClosedMusicLiveActivityView(
+                              albumArtNamespace: albumArtNamespace,
+                              gestureProgress: gestureProgress
+                          )
                               .frame(alignment: .center)
-                      } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
+                      } else if !coordinator.expandingView.show && vm.notchState == .closed && !musicLayout.isActive && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           BoringFaceAnimation()
                        } else if vm.notchState == .open {
                            BoringHeader()
@@ -346,21 +362,7 @@ struct ContentView: View {
                           // Old sneak peek music
                           else if coordinator.sneakPeek.type == .music {
                               if vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard {
-                                  HStack(alignment: .center) {
-                                      Image(systemName: "music.note")
-                                      GeometryReader { geo in
-                                          MarqueeText(
-                                              .constant(musicManager.songTitle + " - " + musicManager.artistName),
-                                              nsFont: .body,
-                                              weight: .medium,
-                                              textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6) : .gray,
-                                              minDuration: 1,
-                                              frameWidth: geo.size.width
-                                          )
-                                      }
-                                  }
-                                  .foregroundStyle(.gray)
-                                  .padding(.bottom, 10)
+                              ClosedMusicSneakPeekView()
                               }
                           }
                       }
@@ -372,23 +374,16 @@ struct ContentView: View {
               }
               .zIndex(2)
             if vm.notchState == .open {
-                VStack {
-                    switch coordinator.currentView {
-                    case .home:
-                        NotchHomeView(albumArtNamespace: albumArtNamespace)
-                    case .shelf:
-                        ShelfView()
-                    case .clipboard:
-                        ClipboardHistoryView()
-                    case .usage:
-                        UsageTabView()
-                    }
+                TabContentView(albumArtNamespace: albumArtNamespace)
+                // Tab contents are intentionally replaced without a transition.
+                // These views can own SwiftData, Quick Look, network refreshes,
+                // or media thumbnails; animating the complete subtree caused
+                // layout transactions to pile up and made tab switching appear
+                // frozen under load. Open/close animation remains on the shell.
+                .transaction { transaction in
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
                 }
-                .transition(
-                    .scale(scale: 0.8, anchor: .top)
-                        .combined(with: .opacity)
-                        .animation(.smooth(duration: 0.35))
-                )
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
                 .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
@@ -413,110 +408,6 @@ struct ContentView: View {
                 MinimalFaceFeatures()
             }
         }.frame(
-            height: vm.effectiveClosedNotchHeight,
-            alignment: .center
-        )
-    }
-
-    @ViewBuilder
-    func MusicLiveActivity() -> some View {
-        HStack {
-            Image(nsImage: musicManager.albumArt)
-                .resizable()
-                .clipped()
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: MusicPlayerImageSizes.cornerRadiusInset.closed)
-                )
-                .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
-                .frame(
-                    width: max(0, vm.effectiveClosedNotchHeight - 12),
-                    height: max(0, vm.effectiveClosedNotchHeight - 12)
-                )
-
-            Rectangle()
-                .fill(.black)
-                .overlay(
-                    HStack(alignment: .top) {
-                        if coordinator.expandingView.show
-                            && coordinator.expandingView.type == .music
-                        {
-                            MarqueeText(
-                                .constant(musicManager.songTitle),
-                                nsFont: .subheadline,
-                                weight: .medium,
-                                textColor: Defaults[.coloredSpectrogram]
-                                    ? Color(nsColor: musicManager.avgColor) : Color.gray,
-                                minDuration: 0.4,
-                                frameWidth: 100
-                            )
-                            .opacity(
-                                (coordinator.expandingView.show
-                                    && Defaults[.sneakPeekStyles] == .inline)
-                                    ? 1 : 0
-                            )
-                            Spacer(minLength: vm.closedNotchSize.width)
-                            // Song Artist
-                            Text(musicManager.artistName)
-                                .font(.notch(.subheadline, weight: .medium))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .foregroundStyle(
-                                    Defaults[.coloredSpectrogram]
-                                        ? Color(nsColor: musicManager.avgColor)
-                                        : Color.gray
-                                )
-                                .opacity(
-                                    (coordinator.expandingView.show
-                                        && coordinator.expandingView.type == .music
-                                        && Defaults[.sneakPeekStyles] == .inline)
-                                        ? 1 : 0
-                                )
-                        }
-                    }
-                )
-                .frame(
-                    width: (coordinator.expandingView.show
-                        && coordinator.expandingView.type == .music
-                        && Defaults[.sneakPeekStyles] == .inline)
-                        ? 380
-                        : vm.closedNotchSize.width
-                            + -cornerRadiusInsets.closed.top
-                )
-
-            HStack {
-                if useMusicVisualizer {
-                    Rectangle()
-                        .fill(
-                            Defaults[.coloredSpectrogram]
-                                ? Color(nsColor: musicManager.avgColor).gradient
-                                : Color.gray.gradient
-                        )
-                        .frame(width: 50, alignment: .center)
-                        .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
-                        .mask {
-                            AudioSpectrumView(isPlaying: $musicManager.isPlaying)
-                                .frame(width: 16, height: 12)
-                        }
-                } else {
-                    LottieAnimationContainer()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .frame(
-                width: max(
-                    0,
-                    vm.effectiveClosedNotchHeight - 12
-                        + gestureProgress / 2
-                ),
-                height: max(
-                    0,
-                    vm.effectiveClosedNotchHeight - 12
-                ),
-                alignment: .center
-            )
-        }
-        .frame(
             height: vm.effectiveClosedNotchHeight,
             alignment: .center
         )
@@ -551,6 +442,7 @@ struct ContentView: View {
         hoverTask?.cancel()
         
         if hovering {
+            NotificationCenter.default.post(name: .notchInteraction, object: nil)
             withAnimation(animationSpring) {
                 isHovering = true
             }
@@ -644,6 +536,180 @@ struct ContentView: View {
                 haptics.toggle()
             }
         }
+    }
+}
+
+/// Keeps tab selection input separate from construction of the selected tab.
+/// A rapid ⌘1/⌘2/⌘3 sequence should not enqueue a full SwiftUI subtree rebuild
+/// for every intermediate key event.
+private struct TabContentView: View {
+    @ObservedObject private var coordinator = BoringViewCoordinator.shared
+    @State private var displayedView: NotchViews = .home
+    @State private var switchTask: Task<Void, Never>?
+
+    let albumArtNamespace: Namespace.ID
+
+    var body: some View {
+        VStack {
+            switch displayedView {
+            case .home:
+                NotchHomeView(albumArtNamespace: albumArtNamespace)
+            case .shelf:
+                ShelfView()
+            case .clipboard:
+                ClipboardHistoryView()
+            case .usage:
+                UsageTabView()
+            }
+        }
+        .onAppear {
+            displayedView = coordinator.currentView
+        }
+        .onChange(of: coordinator.currentView) { _, newView in
+            switchTask?.cancel()
+            switchTask = Task { @MainActor in
+                // Yield first so the header can commit the selection and the
+                // current event can finish before the heavy tab is rebuilt.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                var transaction = Transaction()
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    displayedView = newView
+                }
+            }
+        }
+        .onDisappear {
+            switchTask?.cancel()
+            switchTask = nil
+        }
+    }
+}
+
+/// Keeps high-frequency player updates inside the closed media activity. The
+/// parent notch only observes MusicLayoutState, so switching tabs is isolated
+/// from playback progress and artwork refreshes.
+private struct ClosedMusicLiveActivityView: View {
+    @EnvironmentObject private var vm: BoringViewModel
+    @ObservedObject private var musicManager = MusicManager.shared
+    @ObservedObject private var coordinator = BoringViewCoordinator.shared
+    @Default(.useMusicVisualizer) private var useMusicVisualizer
+
+    let albumArtNamespace: Namespace.ID
+    let gestureProgress: CGFloat
+
+    var body: some View {
+        HStack {
+            Image(nsImage: musicManager.albumArt)
+                .resizable()
+                .clipped()
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: MusicPlayerImageSizes.cornerRadiusInset.closed)
+                )
+                .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
+                .frame(
+                    width: max(0, vm.effectiveClosedNotchHeight - 12),
+                    height: max(0, vm.effectiveClosedNotchHeight - 12)
+                )
+
+            Rectangle()
+                .fill(.black)
+                .overlay {
+                    HStack(alignment: .top) {
+                        if coordinator.expandingView.show
+                            && coordinator.expandingView.type == .music
+                        {
+                            MarqueeText(
+                                .constant(musicManager.songTitle),
+                                nsFont: .subheadline,
+                                weight: .medium,
+                                textColor: Defaults[.coloredSpectrogram]
+                                    ? Color(nsColor: musicManager.avgColor) : Color.gray,
+                                minDuration: 0.4,
+                                frameWidth: 100
+                            )
+                            .opacity(
+                                coordinator.expandingView.show
+                                    && Defaults[.sneakPeekStyles] == .inline ? 1 : 0
+                            )
+                            Spacer(minLength: vm.closedNotchSize.width)
+                            Text(musicManager.artistName)
+                                .font(.notch(.subheadline, weight: .medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .foregroundStyle(
+                                    Defaults[.coloredSpectrogram]
+                                        ? Color(nsColor: musicManager.avgColor)
+                                        : Color.gray
+                                )
+                                .opacity(
+                                    coordinator.expandingView.show
+                                        && coordinator.expandingView.type == .music
+                                        && Defaults[.sneakPeekStyles] == .inline ? 1 : 0
+                                )
+                        }
+                    }
+                }
+                .frame(
+                    width: coordinator.expandingView.show
+                        && coordinator.expandingView.type == .music
+                        && Defaults[.sneakPeekStyles] == .inline
+                        ? 380
+                        : vm.closedNotchSize.width - cornerRadiusInsets.closed.top
+                )
+
+            HStack {
+                if useMusicVisualizer {
+                    Rectangle()
+                        .fill(
+                            Defaults[.coloredSpectrogram]
+                                ? Color(nsColor: musicManager.avgColor).gradient
+                                : Color.gray.gradient
+                        )
+                        .frame(width: 50, alignment: .center)
+                        .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
+                        .mask {
+                            AudioSpectrumView(isPlaying: $musicManager.isPlaying)
+                                .frame(width: 16, height: 12)
+                        }
+                } else {
+                    LottieAnimationContainer()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(
+                width: max(0, vm.effectiveClosedNotchHeight - 12 + gestureProgress / 2),
+                height: max(0, vm.effectiveClosedNotchHeight - 12),
+                alignment: .center
+            )
+        }
+        .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
+    }
+}
+
+private struct ClosedMusicSneakPeekView: View {
+    @ObservedObject private var musicManager = MusicManager.shared
+
+    var body: some View {
+        HStack(alignment: .center) {
+            Image(systemName: "music.note")
+            GeometryReader { geo in
+                MarqueeText(
+                    .constant(musicManager.songTitle + " - " + musicManager.artistName),
+                    nsFont: .body,
+                    weight: .medium,
+                    textColor: Defaults[.playerColorTinting]
+                        ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6)
+                        : .gray,
+                    minDuration: 1,
+                    frameWidth: geo.size.width
+                )
+            }
+        }
+        .foregroundStyle(.gray)
+        .padding(.bottom, 10)
     }
 }
 

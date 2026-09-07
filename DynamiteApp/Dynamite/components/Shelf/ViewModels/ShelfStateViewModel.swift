@@ -22,9 +22,12 @@ final class ShelfStateViewModel: ObservableObject {
     // Queue for deferred bookmark updates to avoid publishing during view updates
     private var pendingBookmarkUpdates: [ShelfItem.ID: Data] = [:]
     private var updateTask: Task<Void, Never>?
+    private var cleanupTask: Task<Void, Never>?
+    private var lastCleanupAt: Date?
 
     private init() {
         items = ShelfPersistenceService.shared.load()
+        cleanupInvalidItemsIfNeeded()
     }
 
 
@@ -89,24 +92,45 @@ final class ShelfStateViewModel: ObservableObject {
         }
     }
 
-    func cleanupInvalidItems() {
-        Task { [weak self] in
-            guard let self else { return }
-            var keep: [ShelfItem] = []
-            for item in self.items {
-                switch item.kind {
-                case .file(let data):
-                    let bookmark = Bookmark(data: data)
-                    if await bookmark.validate() {
-                        keep.append(item)
-                    } else {
-                        item.cleanupStoredData()
-                    }
-                default:
-                    keep.append(item)
+    /// Validate persisted bookmarks away from SwiftUI's layout transaction.
+    /// This used to run from ShelfView.onAppear on every tab switch. Resolving
+    /// security-scoped bookmarks and probing the filesystem can block the main
+    /// thread for an observable amount of time, especially with a large shelf.
+    func cleanupInvalidItemsIfNeeded() {
+        guard cleanupTask == nil else { return }
+        if let lastCleanupAt, Date().timeIntervalSince(lastCleanupAt) < 30 {
+            return
+        }
+
+        let candidates: [(ShelfItem.ID, Data)] = items.compactMap { item in
+            guard case .file(let data) = item.kind else { return nil }
+            return (item.id, data)
+        }
+        guard !candidates.isEmpty else {
+            lastCleanupAt = Date()
+            return
+        }
+
+        lastCleanupAt = Date()
+        cleanupTask = Task { [weak self] in
+            let invalidIDs = await Task.detached(priority: .utility) {
+                var invalid = Set<ShelfItem.ID>()
+                for (id, data) in candidates {
+                    guard await !Bookmark(data: data).validate() else { continue }
+                    invalid.insert(id)
                 }
+                return invalid
+            }.value
+
+            guard let self, !invalidIDs.isEmpty else {
+                self?.cleanupTask = nil
+                return
             }
-            await MainActor.run { self.items = keep }
+
+            let invalidItems = self.items.filter { invalidIDs.contains($0.id) }
+            invalidItems.forEach { $0.cleanupStoredData() }
+            self.items.removeAll { invalidIDs.contains($0.id) }
+            self.cleanupTask = nil
         }
     }
 

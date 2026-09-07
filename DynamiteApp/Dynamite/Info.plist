@@ -13,8 +13,12 @@
 	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/poinncare/Dynamite/main/DynamiteApp/updater/appcast.xml</string>
+	<key>SUCheckForUpdatesAtStartup</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUPublicEDKey</key>
-	<string>B1Y47t8C/v8ImurYA+9arEsuCrpxwJSviekiflMElbI=</string>
+	<string>1afrCzlRgPnOCLez10uAxPVxBzIw0zsCpaGvWya4qY8=</string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict/>

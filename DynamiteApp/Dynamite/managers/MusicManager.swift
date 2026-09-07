@@ -14,6 +14,21 @@ let defaultImage: NSImage = .init(
     accessibilityDescription: "Album Art"
 )!
 
+/// Coarse state used by the closed notch layout. Keeping it separate from
+/// MusicManager prevents playback progress ticks from invalidating ContentView.
+final class MusicLayoutState: ObservableObject {
+    static let shared = MusicLayoutState()
+
+    @Published private(set) var isActive = false
+
+    private init() {}
+
+    func setActive(_ active: Bool) {
+        guard isActive != active else { return }
+        isActive = active
+    }
+}
+
 class MusicManager: ObservableObject {
     // MARK: - Properties
     static let shared = MusicManager()
@@ -68,6 +83,12 @@ class MusicManager: ObservableObject {
     @Published var isTransitioning: Bool = false
     private var transitionWorkItem: DispatchWorkItem?
 
+    // Playback adapters can emit progress several times per second. Publishing
+    // every tick invalidates the whole notch hierarchy, including tabs that do
+    // not display media, and can starve AppKit's layout pass during tab changes.
+    private var lastProgressPublishAt = Date.distantPast
+    private let progressPublishInterval: TimeInterval = 0.25
+
     // MARK: - Initialization
     init() {
         // Listen for changes to the default controller preference
@@ -102,8 +123,11 @@ class MusicManager: ObservableObject {
         controllerCancellables.removeAll()
         flipWorkItem?.cancel()
         transitionWorkItem?.cancel()
+        lastProgressPublishAt = .distantPast
+        MusicLayoutState.shared.setActive(false)
 
         // Release active controller
+        (activeController as? NowPlayingController)?.stop()
         activeController = nil
     }
 
@@ -112,6 +136,7 @@ class MusicManager: ObservableObject {
         // Cleanup previous controller
         if activeController != nil {
             controllerCancellables.removeAll()
+            (activeController as? NowPlayingController)?.stop()
             activeController = nil
         }
 
@@ -181,8 +206,10 @@ class MusicManager: ObservableObject {
     // MARK: - Update Methods
     @MainActor
     private func updateFromPlaybackState(_ state: PlaybackState) {
+        let playbackStateChanged = state.isPlaying != self.isPlaying
+
         // Check for playback state changes (playing/paused)
-        if state.isPlaying != self.isPlaying {
+        if playbackStateChanged {
             NSLog("Playback state changed: \(state.isPlaying ? "Playing" : "Paused")")
             withAnimation(.smooth) {
                 self.isPlaying = state.isPlaying
@@ -255,7 +282,11 @@ class MusicManager: ObservableObject {
             self.album = state.album
         }
 
-        if timeChanged {
+        let now = Date()
+        let progressPublishDue = hasContentChange || playbackStateChanged ||
+            now.timeIntervalSince(lastProgressPublishAt) >= progressPublishInterval
+
+        if timeChanged && progressPublishDue {
             self.elapsedTime = state.currentTime
         }
 
@@ -288,7 +319,10 @@ class MusicManager: ObservableObject {
             self.volume = state.volume
         }
         
-        self.timestampDate = state.lastUpdated
+        if progressPublishDue {
+            self.timestampDate = state.lastUpdated
+            self.lastProgressPublishAt = now
+        }
     }
 
     func toggleFavoriteTrack() {
@@ -538,6 +572,7 @@ class MusicManager: ObservableObject {
     private func updateIdleState(state: Bool) {
         if state {
             isPlayerIdle = false
+            MusicLayoutState.shared.setActive(true)
             debounceIdleTask?.cancel()
         } else {
             debounceIdleTask?.cancel()
@@ -546,6 +581,7 @@ class MusicManager: ObservableObject {
                 try? await Task.sleep(for: .seconds(Defaults[.waitInterval]))
                 withAnimation {
                     self.isPlayerIdle = !self.isPlaying
+                    MusicLayoutState.shared.setActive(self.isPlaying || !self.isPlayerIdle)
                 }
             }
         }

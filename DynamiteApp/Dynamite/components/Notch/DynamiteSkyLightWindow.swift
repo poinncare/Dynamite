@@ -87,6 +87,8 @@ class DynamiteSkyLightWindow: NSPanel {
             .store(in: &observers)
 
         NotificationCenter.default.publisher(for: .clipboardTabKeyFocus)
+            // AppKit focus must always be changed on the main run loop.
+            .receive(on: RunLoop.main)
             .sink { [weak self] notification in
                 let allow = (notification.object as? Bool) ?? false
                 self?.allowKeyFocus = allow

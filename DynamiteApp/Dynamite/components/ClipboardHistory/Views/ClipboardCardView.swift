@@ -22,6 +22,8 @@ struct ClipboardCardView: View {
     let onPaste: () -> Void
     let onCopyMenu: () -> Void
 
+    @ObservedObject private var accentColor = AccentColorStore.shared
+
     private let inset: CGFloat = 8
 
     /// Pre-resolved static bits so body stays cheap while scrolling.
@@ -105,6 +107,7 @@ struct ClipboardCardView: View {
     private var isVisualMedia: Bool { contentKind.isVisualMedia }
 
     var body: some View {
+        let _ = accentColor.revision
         ZStack(alignment: .bottomLeading) {
             if isVisualMedia {
                 mediaBackground
@@ -134,7 +137,7 @@ struct ClipboardCardView: View {
             // Green fill from center (selection accent)
             if copyPhase != nil {
                 Circle()
-                    .fill(Color.accentColor.opacity(0.55))
+                    .fill(Color.effectiveAccent.opacity(0.55))
                     .frame(width: max(cardWidth, cardHeight) * 1.6, height: max(cardWidth, cardHeight) * 1.6)
                     .scaleEffect(fillProgress)
                     .opacity(fillProgress > 0 ? 0.85 : 0)
@@ -148,7 +151,7 @@ struct ClipboardCardView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(
                     isSelected || copyPhase != nil
-                        ? Color.accentColor.opacity(0.15)
+                        ? Color.effectiveAccent.opacity(0.15)
                         : Color.white.opacity(0.08)
                 )
         )
@@ -156,7 +159,7 @@ struct ClipboardCardView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(
                     isSelected || copyPhase != nil
-                        ? Color.accentColor.opacity(0.8)
+                        ? Color.effectiveAccent.opacity(0.8)
                         : Color.white.opacity(0.10),
                     lineWidth: isSelected || copyPhase != nil ? 2 : 1
                 )
@@ -276,7 +279,7 @@ struct ClipboardCardView: View {
         case .link:
             Text(previewText)
                 .font(.notch(size: 11))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Color.effectiveAccent)
                 .lineLimit(lineLimitForHeight)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

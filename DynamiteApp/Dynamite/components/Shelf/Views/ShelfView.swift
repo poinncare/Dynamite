@@ -13,9 +13,11 @@ struct ShelfView: View {
     @StateObject var tvm = ShelfStateViewModel.shared
     @StateObject var selection = ShelfSelectionModel.shared
     @StateObject private var quickLookService = QuickLookService()
+    @ObservedObject private var accentColor = AccentColorStore.shared
     private let spacing: CGFloat = 8
 
     var body: some View {
+        let _ = accentColor.revision
         HStack(spacing: 12) {
             FileShareView()
                 .aspectRatio(1, contentMode: .fit)
@@ -62,16 +64,13 @@ struct ShelfView: View {
         RoundedRectangle(cornerRadius: 16)
             .stroke(
                 vm.dragDetectorTargeting
-                    ? Color.accentColor.opacity(0.9)
+                ? Color.effectiveAccent.opacity(0.9)
                     : Color.white.opacity(0.1),
                 style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
             )
             .overlay {
-                content
+            content
                     .padding()
-            }
-            .transaction { transaction in
-                transaction.animation = vm.animation
             }
             .contentShape(Rectangle())
             .onTapGesture { selection.clear() }
@@ -108,8 +107,7 @@ struct ShelfView: View {
                 }
             }
         }
-        .onAppear {
-            ShelfStateViewModel.shared.cleanupInvalidItems()
-        }
+        // Bookmark validation is started once by ShelfStateViewModel and runs
+        // off the main actor. Never repeat it as a side effect of tab changes.
     }
 }

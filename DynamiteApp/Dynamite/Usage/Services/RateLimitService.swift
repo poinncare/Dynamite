@@ -53,6 +53,8 @@ final class RateLimitService: ObservableObject {
 
     private var pollTimer: Timer?
     private var currentToken: CancellationToken?
+    private var lifecycleTask: Task<Void, Never>?
+    private var notificationObservers: [NSObjectProtocol] = []
     private var lastFetchStartedAt: Date?
     private var started = false
 
@@ -72,20 +74,22 @@ final class RateLimitService: ObservableObject {
         }
         started = true
         // Bootstrap MUST finish before first fetch so we don't read a stale container.
-        Task {
+        lifecycleTask = Task { [weak self] in
             await Task.detached(priority: .utility) {
                 Self.bootstrapCredentialMirrors()
             }.value
+            guard !Task.isCancelled, let self, self.started else { return }
             if fetchImmediately {
-                await refresh(force: true)
+                await self.refresh(force: true)
             } else {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                await refresh(force: true)
+                guard !Task.isCancelled, self.started else { return }
+                await self.refresh(force: true)
             }
         }
         restartTimer()
 
-        NotificationCenter.default.addObserver(
+        notificationObservers.append(NotificationCenter.default.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
@@ -93,8 +97,8 @@ final class RateLimitService: ObservableObject {
             Task { @MainActor in
                 await self?.refresh(force: true)
             }
-        }
-        NotificationCenter.default.addObserver(
+        })
+        notificationObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
@@ -102,14 +106,18 @@ final class RateLimitService: ObservableObject {
             Task { @MainActor in
                 await self?.refreshIfNeeded(force: false)
             }
-        }
+        })
     }
 
     func stop() {
+        lifecycleTask?.cancel()
+        lifecycleTask = nil
         pollTimer?.invalidate()
         pollTimer = nil
         currentToken?.cancel()
         currentToken = nil
+        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        notificationObservers.removeAll()
         started = false
     }
 

@@ -15,6 +15,7 @@ import ObjectiveC
 @MainActor
 final class ShelfItemViewModel: ObservableObject {
     @Published private(set) var item: ShelfItem
+    @Published private(set) var displayName: String
     @Published var thumbnail: NSImage?
     @Published var isDropTargeted: Bool = false
     @Published var isRenaming: Bool = false
@@ -28,15 +29,33 @@ final class ShelfItemViewModel: ObservableObject {
 
     init(item: ShelfItem) {
         self.item = item
-        self.draftTitle = item.displayName
+        self.displayName = ShelfItemPresentation.fallbackDisplayName(for: item.kind)
+        self.draftTitle = self.displayName
+        let kind = item.kind
+        Task { @MainActor [weak self] in
+            let resolved = await Task.detached(priority: .utility) {
+                ShelfItemPresentation.displayName(for: kind)
+            }.value
+            guard let self else { return }
+            self.displayName = resolved
+            if !self.isRenaming {
+                self.draftTitle = resolved
+            }
+        }
         Task { await loadThumbnail() }
     }
 
     var isSelected: Bool { selection.isSelected(item.id) }
 
     func loadThumbnail() async {
-        guard let url = item.fileURL else { return }
+        let kind = item.kind
+        guard case .file(let bookmarkData) = kind else { return }
+        let url = await Task.detached(priority: .utility) {
+            Bookmark(data: bookmarkData).resolveURL()
+        }.value
+        guard !Task.isCancelled, let url else { return }
         if let image = await ThumbnailService.shared.thumbnail(for: url, size: CGSize(width: 56, height: 56)) {
+            guard !Task.isCancelled else { return }
             self.thumbnail = image
         }
     }
@@ -1096,6 +1115,47 @@ final class ShelfItemViewModel: ObservableObject {
             return NSWorkspace.shared.urlForApplication(toOpen: url)
         }
         return nil
+    }
+}
+
+private enum ShelfItemPresentation {
+    static func fallbackDisplayName(for kind: ShelfItemKind) -> String {
+        switch kind {
+        case .file:
+            return "File"
+        case .text(let string):
+            let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? "Text" : value
+        case .link(let url):
+            return url.host ?? url.absoluteString
+        }
+    }
+
+    nonisolated static func displayName(for kind: ShelfItemKind) -> String {
+        switch kind {
+        case .file(let bookmarkData):
+            let bookmark = Bookmark(data: bookmarkData)
+            guard let url = bookmark.resolveURL() else { return "File" }
+            if url.pathExtension.lowercased() == "json" && url.path.contains("TextBlocks"),
+               let data = try? Data(contentsOf: url),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let content = object["content"] as? String {
+                if let title = object["title"] as? String, !title.isEmpty { return title }
+                let firstLine = content.components(separatedBy: .newlines).first ?? content
+                return firstLine.count > 50 ? String(firstLine.prefix(47)) + "..." : firstLine
+            }
+            if url.pathExtension.lowercased() == "webloc" && url.path.contains("WebLocs"),
+               let data = try? Data(contentsOf: url),
+               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                return (plist["Title"] as? String) ?? (plist["URL"] as? String) ?? url.lastPathComponent
+            }
+            return (try? url.resourceValues(forKeys: [.localizedNameKey]).localizedName) ?? url.lastPathComponent
+        case .text(let string):
+            let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? "Text" : value
+        case .link(let url):
+            return url.host ?? url.absoluteString
+        }
     }
 }
 

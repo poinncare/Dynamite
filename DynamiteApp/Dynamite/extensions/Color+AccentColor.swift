@@ -7,6 +7,29 @@
 
 import SwiftUI
 import Defaults
+import Combine
+
+/// Publishes a lightweight revision whenever the user changes the accent
+/// preference. Defaults values are not themselves SwiftUI state, so views
+/// which use Color.effectiveAccent need an explicit invalidation signal.
+final class AccentColorStore: ObservableObject {
+    static let shared = AccentColorStore()
+
+    @Published private(set) var revision: UInt = 0
+    private var cancellables: Set<AnyCancellable> = []
+
+    private init() {
+        Defaults.publisher(.useCustomAccentColor)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.revision &+= 1 }
+            .store(in: &cancellables)
+
+        Defaults.publisher(.customAccentColorData)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.revision &+= 1 }
+            .store(in: &cancellables)
+    }
+}
 
 extension Color {
     static var effectiveAccent: Color {

@@ -4,8 +4,10 @@ import AppKit
 struct DragPreviewView: View {
     let thumbnail: NSImage?
     let displayName: String
+    @ObservedObject private var accentColor = AccentColorStore.shared
 
     var body: some View {
+        let _ = accentColor.revision
         VStack(alignment: .center, spacing: 4) {
             Image(nsImage: thumbnail ?? NSImage())
                 .resizable()
@@ -21,7 +23,7 @@ struct DragPreviewView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.accentColor))
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color.effectiveAccent))
                 .frame(alignment: .top)
         }
         .frame(width: 105)

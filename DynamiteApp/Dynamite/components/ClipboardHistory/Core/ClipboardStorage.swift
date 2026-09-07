@@ -32,7 +32,27 @@ final class ClipboardStorage {
         do {
             container = try ModelContainer(for: HistoryItem.self, HistoryItemContent.self, configurations: config)
         } catch {
-            fatalError("Cannot load clipboard history database: \(error.localizedDescription)")
+            // A damaged/old store must not take down the whole menu-bar app.
+            // Keep the original file for recovery and start a fresh persistent
+            // store; the user can continue using Clipboard immediately.
+            NSLog("Dynamite: clipboard store unavailable, using recovery store: \(error.localizedDescription)")
+            let recoveryURL = dir.appendingPathComponent("ClipboardHistory-recovery.sqlite")
+            do {
+                container = try ModelContainer(
+                    for: HistoryItem.self,
+                    HistoryItemContent.self,
+                    configurations: ModelConfiguration(url: recoveryURL)
+                )
+            } catch {
+                // SwiftData's in-memory configuration is the final safety net
+                // for permission or filesystem failures.
+                NSLog("Dynamite: clipboard recovery store unavailable, using memory store: \(error.localizedDescription)")
+                container = try! ModelContainer(
+                    for: HistoryItem.self,
+                    HistoryItemContent.self,
+                    configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+                )
+            }
         }
     }
 }

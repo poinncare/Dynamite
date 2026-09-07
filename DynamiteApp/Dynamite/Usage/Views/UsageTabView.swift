@@ -43,16 +43,10 @@ struct UsageTabView: View {
                         }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)
-                    ))
                 } else {
                     compactListWithMascot(providers: providers, size: geo.size)
-                        .transition(.opacity)
                 }
             }
-            .animation(.smooth(duration: 0.22), value: expandedProvider)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .id(language.revision)

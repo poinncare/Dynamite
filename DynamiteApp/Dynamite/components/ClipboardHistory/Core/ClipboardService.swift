@@ -56,11 +56,9 @@ final class ClipboardService {
         guard Defaults[.clipboardEnabled] else { return }
         timer?.invalidate()
         timer = Timer.scheduledTimer(
-            // Pasteboard changeCount is cheap to read, but polling twice per
-            // second keeps the app awake unnecessarily. One second is still
-            // effectively instant for clipboard history and is a safe floor
-            // for values saved by older versions.
-            timeInterval: max(1.0, Defaults[.clipboardCheckInterval]),
+            // Keep the user-selected interval responsive while preventing
+            // corrupt/legacy values from creating a busy loop.
+            timeInterval: min(max(0.25, Defaults[.clipboardCheckInterval]), 60),
             target: self,
             selector: #selector(checkForChangesInPasteboard),
             userInfo: nil,

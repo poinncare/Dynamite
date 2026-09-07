@@ -18,8 +18,8 @@ struct ShelfItemView: View {
     @StateObject private var viewModel: ShelfItemViewModel
     @EnvironmentObject private var quickLookService: QuickLookService
     @State private var showStack = false
-    @State private var cachedPreviewImage: NSImage?
     @State private var debouncedDropTarget = false
+    @ObservedObject private var accentColor = AccentColorStore.shared
 
     private var isSelected: Bool { viewModel.isSelected }
     private var shouldHideDuringDrag: Bool { selection.isDragging && selection.isSelected(item.id) && false }
@@ -30,6 +30,7 @@ struct ShelfItemView: View {
     }
 
     var body: some View {
+        let _ = accentColor.revision
         ZStack {
             if !shouldHideDuringDrag {
                 VStack(alignment: .center, spacing: 2) {
@@ -47,10 +48,6 @@ struct ShelfItemView: View {
                 DraggableClickHandler(
                     item: item,
                     viewModel: viewModel,
-                    cachedPreviewImage: $cachedPreviewImage,
-                    dragPreviewContent: {
-                        DragPreviewView(thumbnail: viewModel.thumbnail ?? item.icon, displayName: item.displayName)
-                    },
                     onRightClick: viewModel.handleRightClick,
                     onClick: { event, nsview in
                         viewModel.handleClick(event: event, view: nsview)
@@ -72,21 +69,8 @@ struct ShelfItemView: View {
             }
         }
         .onAppear {
-            Task { 
-                await viewModel.loadThumbnail()
-                // Pre-render drag preview once on appear
-                if cachedPreviewImage == nil {
-                    cachedPreviewImage = await renderDragPreview()
-                }
-            }
             viewModel.onQuickLookRequest = { urls in
                 quickLookService.show(urls: urls, selectFirst: true)
-            }
-        }
-        .onChange(of: viewModel.thumbnail) { _, _ in
-            // Invalidate cached preview when thumbnail changes
-            Task {
-                cachedPreviewImage = await renderDragPreview()
             }
         }
         .quickLookPresenter(using: quickLookService)
@@ -95,7 +79,7 @@ struct ShelfItemView: View {
     // MARK: - View Components
 
     private var iconView: some View {
-        Image(nsImage: viewModel.thumbnail ?? item.icon)
+        Image(nsImage: viewModel.thumbnail ?? fallbackIcon)
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: 56, height: 56)
@@ -104,7 +88,7 @@ struct ShelfItemView: View {
     }
 
     private var textView: some View {
-        Text(item.displayName)
+        Text(viewModel.displayName)
             .font(.notch(size: 12, weight: .medium))
             .foregroundStyle(.primary)
             .lineLimit(2)
@@ -127,9 +111,9 @@ struct ShelfItemView: View {
 
     private var backgroundColor: Color {
         if debouncedDropTarget {
-            return Color.accentColor.opacity(0.25)
+            return Color.effectiveAccent.opacity(0.25)
         } else if isSelected {
-            return Color.accentColor.opacity(0.15)
+            return Color.effectiveAccent.opacity(0.15)
         } else {
             return Color.clear
         }
@@ -137,9 +121,9 @@ struct ShelfItemView: View {
 
     private var strokeColor: Color {
         if debouncedDropTarget {
-            return Color.accentColor.opacity(0.9)
+            return Color.effectiveAccent.opacity(0.9)
         } else if isSelected {
-            return Color.accentColor.opacity(0.8)
+            return Color.effectiveAccent.opacity(0.8)
         } else {
             return Color.clear
         }
@@ -155,25 +139,24 @@ struct ShelfItemView: View {
         }
     }
     
-    // MARK: - Drag Preview Rendering
-    
-    @MainActor
-    private func renderDragPreview() async -> NSImage {
-        let content = DragPreviewView(thumbnail: viewModel.thumbnail ?? item.icon, displayName: item.displayName)
-        let renderer = ImageRenderer(content: content)
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        return renderer.nsImage ?? (viewModel.thumbnail ?? item.icon)
+    private var fallbackIcon: NSImage {
+        switch item.kind {
+        case .file:
+            return NSImage(systemSymbolName: "doc", accessibilityDescription: nil) ?? NSImage()
+        case .text:
+            return NSImage(systemSymbolName: "text.alignleft", accessibilityDescription: nil) ?? NSImage()
+        case .link:
+            return NSImage(systemSymbolName: "link", accessibilityDescription: nil) ?? NSImage()
+        }
     }
 
     
 }
 
 // MARK: - Draggable Click Handler with NSDraggingSource
-private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
+private struct DraggableClickHandler: NSViewRepresentable {
     let item: ShelfItem
     let viewModel: ShelfItemViewModel
-    @Binding var cachedPreviewImage: NSImage?
-    @ViewBuilder let dragPreviewContent: () -> Content
     let onRightClick: (NSEvent, NSView) -> Void
     let onClick: (NSEvent, NSView) -> Void
     
@@ -181,7 +164,9 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
         let view = DraggableClickView()
         view.item = item
         view.viewModel = viewModel
-        view.dragPreviewImage = cachedPreviewImage ?? renderDragPreview()
+        // Use a cheap placeholder until the actor-backed thumbnail arrives.
+        // Dragging still gets the real thumbnail when it is available.
+        view.dragPreviewImage = viewModel.thumbnail ?? DraggableClickView.fallbackDragImage()
         view.onRightClick = onRightClick
         view.onClick = onClick
         return view
@@ -190,25 +175,11 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
     func updateNSView(_ nsView: DraggableClickView, context: Context) {
         nsView.item = item
         nsView.viewModel = viewModel
-        // Only update preview if cached version is available
-        if let cached = cachedPreviewImage {
-            nsView.dragPreviewImage = cached
+        if let thumbnail = viewModel.thumbnail {
+            nsView.dragPreviewImage = thumbnail
         }
         nsView.onRightClick = onRightClick
         nsView.onClick = onClick
-    }
-    
-    private func renderDragPreview() -> NSImage {
-        let content = dragPreviewContent()
-        let renderer = ImageRenderer(content: content)
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        
-        if let nsImage = renderer.nsImage {
-            return nsImage
-        }
-        
-        // Fallback to icon if rendering fails
-        return viewModel.thumbnail ?? item.icon
     }
     
     final class DraggableClickView: NSView, NSDraggingSource {
@@ -222,6 +193,10 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
         private let dragThreshold: CGFloat = 3.0
         private var draggedURLs: [URL] = []
         private var draggedItems: [ShelfItem] = []
+
+        static func fallbackDragImage() -> NSImage {
+            NSImage(systemSymbolName: "doc.fill", accessibilityDescription: nil) ?? NSImage()
+        }
         
         override func rightMouseDown(with event: NSEvent) {
             onRightClick?(event, self)
@@ -273,7 +248,7 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
                     let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
 
                     // Use the drag preview image
-                    let image = dragPreviewImage ?? dragItem.icon
+                    let image = dragPreviewImage ?? Self.fallbackDragImage()
                     let imageFrame = NSRect(
                         x: 0,
                         y: 0,

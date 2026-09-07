@@ -9,8 +9,10 @@ import SwiftUI
 struct SpacesSettingsView: View {
     @ObservedObject private var spaces = SpacesStore.shared
     @ObservedObject private var language = LanguageManager.shared
+    @ObservedObject private var accentColor = AccentColorStore.shared
 
     var body: some View {
+        let _ = accentColor.revision
         Form {
             Section {
                 Text(L("Drag rows to change the order of spaces in the notch. ⌘1–⌘N follow the visible order."))
@@ -138,12 +140,12 @@ private struct SpaceSettingsRow: View {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(spaces.icon(for: entry.kind) == icon
-                                      ? Color.accentColor.opacity(0.25)
+                                      ? Color.effectiveAccent.opacity(0.25)
                                       : Color(nsColor: .controlBackgroundColor))
                                 .frame(width: 44, height: 44)
                             if spaces.icon(for: entry.kind) == icon {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                                    .strokeBorder(Color.effectiveAccent, lineWidth: 2)
                                     .frame(width: 44, height: 44)
                             }
                             SpaceIconView(icon: icon, size: 22)

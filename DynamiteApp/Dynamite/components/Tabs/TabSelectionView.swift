@@ -19,8 +19,6 @@ struct TabSelectionView: View {
     @Default(.clipboardEnabled) private var clipboardEnabled
     @Default(.usageTabEnabled) private var usageTabEnabled
     @ObservedObject private var language = LanguageManager.shared
-    @Namespace var animation
-
     @State private var draggingKind: SpaceKind?
     @State private var dropTargetKind: SpaceKind?
 
@@ -46,9 +44,13 @@ struct TabSelectionView: View {
                     selected: coordinator.currentView == entry.kind.notchView,
                     commandIndex: keyboard.isCommandHeld ? commandNumber : nil
                 ) {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        coordinator.currentView = entry.kind.notchView
-                    }
+                    NotificationCenter.default.post(name: .notchInteraction, object: nil)
+                    // Keep the tab change out of an animated gesture
+                    // transaction. The content below can be a SwiftData,
+                    // Quick Look, or usage view; animating insertion/removal
+                    // of that whole tree made rapid tab changes block the
+                    // main event loop.
+                    selectTabWithoutAnimation(entry.kind.notchView)
                 }
                 .frame(height: 26)
                 .padding(.top, keyboard.isCommandHeld ? 10 : 0)
@@ -57,11 +59,9 @@ struct TabSelectionView: View {
                     if entry.kind.notchView == coordinator.currentView {
                         Capsule()
                             .fill(Color(nsColor: .secondarySystemFill))
-                            .matchedGeometryEffect(id: "capsule", in: animation)
                     } else {
                         Capsule()
                             .fill(Color.clear)
-                            .matchedGeometryEffect(id: "capsule", in: animation)
                             .hidden()
                     }
                 }
@@ -90,8 +90,6 @@ struct TabSelectionView: View {
                 ))
             }
         }
-        .animation(.easeInOut(duration: 0.12), value: keyboard.isCommandHeld)
-        .animation(.easeInOut(duration: 0.15), value: spaces.visibleEntries.map(\.id))
         .id("\(language.revision)-\(spaces.visibleEntries.map { "\($0.kind.rawValue):\($0.icon.rawValue)" }.joined(separator: ","))")
         .onDrop(of: [UTType.plainText, UTType.text], isTargeted: nil) { providers in
             // Drop past the end → append
@@ -100,6 +98,15 @@ struct TabSelectionView: View {
             self.draggingKind = nil
             dropTargetKind = nil
             return true
+        }
+    }
+
+    private func selectTabWithoutAnimation(_ view: NotchViews) {
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            coordinator.currentView = view
         }
     }
 }

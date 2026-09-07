@@ -18,6 +18,7 @@ struct FileShareView: View {
     @State private var hostView: NSView?
     @State private var interactionNonce: UUID = .init()
     @State private var isProcessing = false
+    @ObservedObject private var accentColor = AccentColorStore.shared
     
     private var selectedProvider: QuickShareProvider {
         quickShare.availableProviders.first(where: { $0.id == quickShareProvider }) ?? QuickShareProvider(id: "System Share Menu", imageData: nil, supportsRawText: true)
@@ -39,7 +40,9 @@ struct FileShareView: View {
             }
     }
 
+    @ViewBuilder
     private var dropArea: some View {
+        let _ = accentColor.revision
         ZStack {
             RoundedRectangle(cornerRadius: 12)
                 .fill(
@@ -49,7 +52,7 @@ struct FileShareView: View {
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(
                             vm.dropZoneTargeting
-                                ? Color.accentColor.opacity(0.9)
+                                ? Color.effectiveAccent.opacity(0.9)
                                 : Color.white.opacity(0.1),
                             style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
                         )
@@ -76,7 +79,7 @@ struct FileShareView: View {
                     }
                     .frame(width: 34, height: 34)
                         .foregroundStyle(
-                            vm.dropZoneTargeting ? Color.accentColor : Color.gray
+                            vm.dropZoneTargeting ? Color.effectiveAccent : Color.gray
                         )
                         .scaleEffect(
                             vm.dropZoneTargeting ? 1.06 : 1.0
@@ -125,11 +128,16 @@ private struct NSViewHost: NSViewRepresentable {
     
     func makeNSView(context: Context) -> NSView {
         let v = NSView(frame: .zero)
-        DispatchQueue.main.async { self.view = v }
+        view = v
         return v
     }
     
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { self.view = nsView }
+        // SwiftUI may call updateNSView for every parent transaction. Avoid
+        // enqueueing an identical State write on every pass; the old code
+        // created an unbounded main-queue tail while changing tabs.
+        if view !== nsView {
+            view = nsView
+        }
     }
 }

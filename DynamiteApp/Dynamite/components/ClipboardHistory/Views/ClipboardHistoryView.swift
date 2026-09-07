@@ -31,8 +31,10 @@ struct ClipboardHistoryView: View {
     // MARK: Card geometry
     private let cardSpacing: CGFloat = 8
     private let cornerRadius: CGFloat = 10
-    // Match the bottom edge: no extra horizontal frame around the card strip.
-    private let outerHorizontalPadding: CGFloat = 0
+    // Keep the first card inside the rounded notch mask. Without this inset
+    // the selected outline can be clipped by the left edge when Clipboard is
+    // opened directly by its global shortcut.
+    private let outerHorizontalPadding: CGFloat = 10
     // Shelf's reference tile fills the complete content height; Clipboard
     // uses the same vertical geometry so its square is exactly 140×140.
     private let bottomSafe: CGFloat = 0
@@ -208,10 +210,7 @@ struct ClipboardHistoryView: View {
     // MARK: - Copy + animation + delayed close
 
     private func handleCardTap(item: HistoryItem, index: Int) {
-        if index != manager.selectedIndex {
-            manager.selectedIndex = index
-            return
-        }
+        manager.selectedIndex = index
         if Defaults[.clipboardPasteAutomatically] {
             performAnimatedAction(item: item, index: index, paste: true)
         } else {

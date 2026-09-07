@@ -194,10 +194,11 @@ final class ClipboardKeyboardMonitor: ObservableObject {
         let order = visibleTabOrder
         guard order.indices.contains(index) else { return }
         let target = order[index]
+        NotificationCenter.default.post(name: .notchInteraction, object: nil)
         // The tab content owns its original transition. Wrapping the state
         // change in a second animation made rapid shortcut presses queue
         // competing layout transactions and caused visible input lag.
-        BoringViewCoordinator.shared.currentView = target
+        selectTabWithoutAnimation(target)
     }
 
     private func cycleTab(delta: Int) {
@@ -207,7 +208,17 @@ final class ClipboardKeyboardMonitor: ObservableObject {
         let current = BoringViewCoordinator.shared.currentView
         let idx = available.firstIndex(of: current) ?? 0
         let next = (idx + delta + available.count) % available.count
-        BoringViewCoordinator.shared.currentView = available[next]
+        NotificationCenter.default.post(name: .notchInteraction, object: nil)
+        selectTabWithoutAnimation(available[next])
+    }
+
+    private func selectTabWithoutAnimation(_ view: NotchViews) {
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            BoringViewCoordinator.shared.currentView = view
+        }
     }
 
     private func closeNotchIfOpen() {

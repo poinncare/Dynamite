@@ -40,13 +40,10 @@ struct TabButton: View {
                                 .fill(Color.white.opacity(0.18))
                         )
                         .offset(y: -10)
-                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
             }
         }
         .buttonStyle(PlainButtonStyle())
-        .animation(.easeInOut(duration: 0.12), value: commandIndex != nil)
-        .animation(.easeInOut(duration: 0.12), value: selected)
         .help(label)
     }
 }

@@ -369,10 +369,6 @@ struct GeneralSettings: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .onChange(of: minimumHoverDuration) {
-                    NotificationCenter.default.post(
-                        name: Notification.Name.notchHeightChanged, object: nil)
-                }
             }
         } header: {
             Text(L("Notch behavior"))
@@ -587,8 +583,8 @@ struct HUD: View {
                     Text(L("Inline"))
                         .tag(true)
                 }
-                .onChange(of: Defaults[.inlineHUD]) {
-                    if Defaults[.inlineHUD] {
+                .onChange(of: inlineHUD) { _, isInline in
+                    if isInline {
                         withAnimation {
                             Defaults[.systemEventIndicatorShadow] = false
                             Defaults[.enableGradient] = false
@@ -1490,8 +1486,11 @@ struct Advanced: View {
                     Picker(L("Accent color"), selection: $useCustomAccentColor) {
                         Text(L("System")).tag(false)
                         Text(L("Custom")).tag(true)
-                    }
-                    .pickerStyle(.segmented)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: useCustomAccentColor) { _, _ in
+                    forceUiUpdate()
+                }
                     
                     if !useCustomAccentColor {
                         // System accent info
@@ -1761,6 +1760,7 @@ struct ClipboardSettings: View {
     @Default(.clipboardCheckInterval) var clipboardCheckInterval
     @Default(.clipboardHistorySize) var clipboardHistorySize
     @Default(.clipboardPasteAutomatically) var clipboardPasteAutomatically
+    @Default(.clipboardIgnoreEvents) var clipboardIgnoreEvents
 
     var body: some View {
         Form {
@@ -1803,7 +1803,11 @@ struct ClipboardSettings: View {
                     TextField("", value: $clipboardCheckInterval, format: .number)
                         .frame(width: 60)
                         .textFieldStyle(.roundedBorder)
-                        .onChange(of: clipboardCheckInterval) { _, _ in
+                        .onChange(of: clipboardCheckInterval) { _, newValue in
+                            let clamped = min(max(newValue, 0.25), 60)
+                            if clamped != newValue {
+                                clipboardCheckInterval = clamped
+                            }
                             if Defaults[.clipboardEnabled] {
                                 ClipboardService.shared.restart()
                             }
@@ -1812,7 +1816,7 @@ struct ClipboardSettings: View {
             } header: {
                 Text(L("General"))
             } footer: {
-                Text(L("When “Paste on single click” is off, click only copies; Enter and double-click still paste. History is stored in Application Support/Dynamite/ClipboardHistory.sqlite"))
+                Text(L("When “Paste on single click” is off, clicking copies and Enter or the context menu pastes. History is stored in Application Support/Dynamite/ClipboardHistory.sqlite"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1824,7 +1828,7 @@ struct ClipboardSettings: View {
                 Defaults.Toggle(key: .clipboardIgnoreOnlyNextEvent) {
                     Text(L("Ignore only next event"))
                 }
-                .disabled(!Defaults[.clipboardIgnoreEvents])
+                .disabled(!clipboardIgnoreEvents)
                 Defaults.Toggle(key: .clipboardIgnoreAllAppsExceptListed) {
                     Text(L("Only keep copies from listed apps (whitelist)"))
                 }

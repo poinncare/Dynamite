@@ -68,6 +68,7 @@ final class NowPlayingController: ObservableObject, MediaControllerProtocol {
     private var process: Process?
     private var pipeHandler: JSONLinesPipeHandler?
     private var streamTask: Task<Void, Never>?
+    private var stopRequested = false
 
     // MARK: - Initialization
     init?() {
@@ -99,23 +100,30 @@ final class NowPlayingController: ObservableObject, MediaControllerProtocol {
         Task { await setupNowPlayingObserver() }
     }
 
-    deinit {
+    /// Stop the adapter immediately when the controller is replaced or the
+    /// application quits. Relying only on deinit allowed the stream task to
+    /// keep the Perl helper alive and accumulate orphaned processes.
+    func stop() {
+        stopRequested = true
         streamTask?.cancel()
+        streamTask = nil
         
         if let pipeHandler = self.pipeHandler {
-            Task { await pipeHandler.close()
-            }
+            Task { await pipeHandler.close() }
         }
         
         if let process = self.process {
             if process.isRunning {
                 process.terminate()
-                process.waitUntilExit()
             }
         }
 
         self.process = nil
         self.pipeHandler = nil
+    }
+
+    deinit {
+        stop()
     }
 
     // MARK: - Protocol Implementation
@@ -188,6 +196,8 @@ final class NowPlayingController: ObservableObject, MediaControllerProtocol {
     
     // MARK: - Setup Methods
     private func setupNowPlayingObserver() async {
+        guard !stopRequested else { return }
+
         let process = Process()
         guard
             let scriptURL = Bundle.main.url(forResource: "mediaremote-adapter", withExtension: "pl"),
@@ -196,18 +206,30 @@ final class NowPlayingController: ObservableObject, MediaControllerProtocol {
             assertionFailure("Could not find mediaremote-adapter.pl script or framework path")
             return
         }
-        
+
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [scriptURL.path, frameworkPath, "stream"]
         
         let pipeHandler = JSONLinesPipeHandler()
         process.standardOutput = await pipeHandler.getPipe()
+
+        // stop() can run while the async pipe is being prepared. Do not spawn
+        // a helper after its controller has already been replaced or destroyed.
+        guard !stopRequested else {
+            await pipeHandler.close()
+            return
+        }
         
         self.process = process
         self.pipeHandler = pipeHandler
 
         do {
             try process.run()
+            guard !stopRequested else {
+                process.terminate()
+                await pipeHandler.close()
+                return
+            }
             streamTask = Task { [weak self] in
                 await self?.processJSONStream()
             }
@@ -351,6 +373,8 @@ actor JSONLinesPipeHandler {
     private let pipe: Pipe
     private let fileHandle: FileHandle
     private var buffer = ""
+    private var isClosed = false
+    private var pendingRead: CheckedContinuation<Data, Error>?
     
     init() {
         self.pipe = Pipe()
@@ -404,23 +428,33 @@ actor JSONLinesPipeHandler {
     }
     
     private func readData() async throws -> Data {
+        guard !isClosed else { throw CancellationError() }
+
         return try await withCheckedThrowingContinuation { continuation in
-            
+            pendingRead = continuation
             fileHandle.readabilityHandler = { handle in
                 let data = handle.availableData
-                handle.readabilityHandler = nil
-                continuation.resume(returning: data)
+                Task { [weak self] in
+                    await self?.finishRead(with: data)
+                }
             }
         }
     }
+
+    private func finishRead(with data: Data) {
+        guard let pendingRead else { return }
+        self.pendingRead = nil
+        fileHandle.readabilityHandler = nil
+        pendingRead.resume(returning: data)
+    }
     
     func close() async {
-        do {
-            fileHandle.readabilityHandler = nil
-            try fileHandle.close()
-            try pipe.fileHandleForWriting.close()
-        } catch {
-            print("Error closing pipe handler: \(error)")
-        }
+        guard !isClosed else { return }
+        isClosed = true
+        fileHandle.readabilityHandler = nil
+        pendingRead?.resume(throwing: CancellationError())
+        pendingRead = nil
+        try? fileHandle.close()
+        try? pipe.fileHandleForWriting.close()
     }
 }

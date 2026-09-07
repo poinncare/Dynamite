@@ -55,6 +55,7 @@ class BoringViewCoordinator: ObservableObject {
     private var sneakPeekDispatch: DispatchWorkItem?
     private var expandingViewDispatch: DispatchWorkItem?
     private var hudEnableTask: Task<Void, Never>?
+    private var spaceFeatureCancellables = Set<AnyCancellable>()
 
     @AppStorage("firstLaunch") var firstLaunch: Bool = true
     @AppStorage("showWhatsNew") var showWhatsNew: Bool = true
@@ -122,6 +123,7 @@ class BoringViewCoordinator: ObservableObject {
         }
         
         selectedScreenUUID = preferredScreenUUID ?? NSScreen.main?.displayUUID ?? ""
+        setupSpaceFeatureObservers()
         // Observe changes to accessibility authorization and react accordingly
         accessibilityObserver = NotificationCenter.default.addObserver(
             forName: Notification.Name.accessibilityAuthorizationChanged,
@@ -174,11 +176,34 @@ class BoringViewCoordinator: ObservableObject {
             }
         }
     }
+
+    private func setupSpaceFeatureObservers() {
+        Defaults.publisher(.boringShelf)
+            .sink { [weak self] _ in self?.ensureCurrentViewIsVisible() }
+            .store(in: &spaceFeatureCancellables)
+        Defaults.publisher(.clipboardEnabled)
+            .sink { [weak self] _ in self?.ensureCurrentViewIsVisible() }
+            .store(in: &spaceFeatureCancellables)
+        Defaults.publisher(.usageTabEnabled)
+            .sink { [weak self] _ in self?.ensureCurrentViewIsVisible() }
+            .store(in: &spaceFeatureCancellables)
+    }
+
+    private func ensureCurrentViewIsVisible() {
+        guard let kind = SpaceKind.from(notchView: currentView), !kind.isFeatureEnabled else {
+            return
+        }
+        currentView = SpacesStore.shared.firstVisibleNotchView
+    }
     
     @objc func sneakPeekEvent(_ notification: Notification) {
         let decoder = JSONDecoder()
+        guard let data = notification.userInfo?.values.compactMap({ $0 as? Data }).first else {
+            NSLog("Dynamite: ignoring malformed sneak peek notification")
+            return
+        }
         if let decodedData = try? decoder.decode(
-            SharedSneakPeek.self, from: notification.userInfo?.first?.value as! Data)
+            SharedSneakPeek.self, from: data)
         {
             let contentType =
                 decodedData.type == "brightness"

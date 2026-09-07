@@ -196,18 +196,22 @@ class BoringViewModel: NSObject, ObservableObject {
     /// - Parameter view: When non-nil, open directly on that tab (global shortcuts).
     ///   When nil, apply the usual default-space rules (hover / empty open).
     func open(to view: NotchViews? = nil) {
-        self.notchSize = openNotchSize
-        self.notchState = .open
-
+        // Select an explicit destination before publishing .open. SwiftUI can
+        // render the first open frame between two @Published changes; setting
+        // the tab first prevents a shortcut from briefly showing the default
+        // space and then jumping to Clipboard.
         if let view {
-            // Explicit target (e.g. clipboard shortcut) — do not run applyDefaultSpaceOnOpen,
-            // which would overwrite the requested tab with Home/first space.
             coordinator.currentView = view
-        } else {
+        }
+
+        if view == nil {
             // Unless “open last tab” is on, land on the first space in the user’s order
             // (not a hard-coded Home). Shelf override still applies when enabled + non-empty.
             applyDefaultSpaceOnOpen()
         }
+
+        self.notchSize = openNotchSize
+        self.notchState = .open
 
         // Force music information update when notch is opened
         MusicManager.shared.forceUpdate()
