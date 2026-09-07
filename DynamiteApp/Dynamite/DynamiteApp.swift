@@ -303,7 +303,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.contentView = NSHostingView(
-            rootView: DeferredNotchRootView()
+            rootView: ContentView()
                 .environmentObject(viewModel)
         )
 
@@ -718,98 +718,5 @@ extension CGRect: @retroactive Hashable {
 
     public static func == (lhs: CGRect, rhs: CGRect) -> Bool {
         return lhs.origin == rhs.origin && lhs.size == rhs.size
-    }
-}
-
-/// Keeps the parked notch cheap. The full SwiftUI tree is materialized only
-/// after the user opens it and is released again when it closes.
-@MainActor
-private struct DeferredNotchRootView: View {
-    @EnvironmentObject private var viewModel: BoringViewModel
-
-    var body: some View {
-        let isOpen = viewModel.notchState == .open
-        let notchAnimation = isOpen
-            ? Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
-            : Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
-
-        ZStack(alignment: .top) {
-            LightweightNotchShell()
-
-            if isOpen {
-                ContentView()
-                    .transition(
-                        .scale(scale: 0.8, anchor: .top)
-                            .combined(with: .opacity)
-                            .animation(.smooth(duration: 0.35))
-                    )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(notchAnimation, value: viewModel.notchState)
-    }
-}
-
-@MainActor
-private struct LightweightNotchShell: View {
-    @EnvironmentObject private var viewModel: BoringViewModel
-    @ObservedObject private var coordinator = BoringViewCoordinator.shared
-    @State private var hoverTask: Task<Void, Never>?
-
-    private let notchAnimation = Animation.spring(
-        response: 0.42,
-        dampingFraction: 0.8,
-        blendDuration: 0
-    )
-
-    var body: some View {
-        let isOpen = viewModel.notchState == .open
-        let width = isOpen ? viewModel.notchSize.width : viewModel.closedNotchSize.width
-        let height = isOpen ? viewModel.notchSize.height : viewModel.effectiveClosedNotchHeight
-        let cornerScaling = Defaults[.cornerRadiusScaling]
-        let topCornerRadius = isOpen && cornerScaling
-            ? cornerRadiusInsets.opened.top
-            : cornerRadiusInsets.closed.top
-        let bottomCornerRadius = isOpen && cornerScaling
-            ? cornerRadiusInsets.opened.bottom
-            : cornerRadiusInsets.closed.bottom
-
-        NotchShape(
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        )
-            .fill(.black)
-            .frame(width: width, height: height)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isOpen else { return }
-                withAnimation(notchAnimation) {
-                    viewModel.open()
-                }
-            }
-            .onHover { hovering in
-                handleHover(hovering)
-            }
-            .onDisappear { hoverTask?.cancel() }
-    }
-
-    private func handleHover(_ hovering: Bool) {
-        hoverTask?.cancel()
-        guard hovering,
-              !coordinator.firstLaunch,
-              viewModel.notchState == .closed,
-              Defaults[.openNotchOnHover]
-        else { return }
-
-        hoverTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Defaults[.minimumHoverDuration]))
-            guard !Task.isCancelled,
-                  viewModel.notchState == .closed,
-                  Defaults[.openNotchOnHover]
-            else { return }
-            withAnimation(notchAnimation) {
-                viewModel.open()
-            }
-        }
     }
 }
