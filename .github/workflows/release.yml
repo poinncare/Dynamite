@@ -75,8 +75,10 @@ jobs:
           ditto \
             "$RUNNER_TEMP/DynamiteDerivedData/Build/Products/Release/Dynamite.app" \
             "Release/Dynamite.app"
-          python3 -m pip install --require-hashes \
+          python3 -m venv "$RUNNER_TEMP/dmg-venv"
+          "$RUNNER_TEMP/dmg-venv/bin/python" -m pip install --require-hashes \
             -r DynamiteApp/Configuration/dmg/requirements.txt
+          export PATH="$RUNNER_TEMP/dmg-venv/bin:$PATH"
           DynamiteApp/Configuration/dmg/create_dmg.sh \
             Release/Dynamite.app \
             Release/Dynamite.dmg \
