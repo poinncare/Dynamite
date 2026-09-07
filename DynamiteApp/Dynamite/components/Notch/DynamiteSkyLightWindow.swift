@@ -87,7 +87,6 @@ class DynamiteSkyLightWindow: NSPanel {
             .store(in: &observers)
 
         NotificationCenter.default.publisher(for: .clipboardTabKeyFocus)
-            .receive(on: RunLoop.main)
             .sink { [weak self] notification in
                 let allow = (notification.object as? Bool) ?? false
                 self?.allowKeyFocus = allow

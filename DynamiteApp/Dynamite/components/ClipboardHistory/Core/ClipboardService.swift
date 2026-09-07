@@ -91,7 +91,9 @@ final class ClipboardService {
 
         for content in contents {
             guard content.type != NSPasteboard.PasteboardType.fileURL.rawValue else { continue }
-            pasteboard.setData(content.value, forType: NSPasteboard.PasteboardType(content.type))
+            let data = content.value ?? imageData(for: content.type, item: item)
+            guard let data else { continue }
+            pasteboard.setData(data, forType: NSPasteboard.PasteboardType(content.type))
         }
 
         let fileURLItems: [NSPasteboardItem] = contents.compactMap { content in
@@ -107,6 +109,15 @@ final class ClipboardService {
         pasteboard.setString(item.application ?? "", forType: .source)
         sync()
         changeCount = pasteboard.changeCount
+    }
+
+    /// Images are stored on disk to keep the long-running menu-bar process
+    /// small. Load the original bytes only for the explicit copy operation.
+    private func imageData(for type: String, item: HistoryItem) -> Data? {
+        guard ClipboardStorageType.images.types.contains(NSPasteboard.PasteboardType(type)) else {
+            return nil
+        }
+        return item.imageData
     }
 
     /// Synthesize Cmd+V into the previously frontmost application.
@@ -191,9 +202,13 @@ final class ClipboardService {
             // A single image often advertises TIFF, PNG, JPEG, HEIC and
             // public.image simultaneously. Keeping every representation made
             // one copy occupy several times its actual size in SwiftData.
-            // Keep the first available lossless/native representation only.
+            // Keep one representation, but choose the first representation
+            // that actually has bytes: some pasteboards advertise PNG/HEIC
+            // while only providing TIFF lazily.
             let imageTypes: [NSPasteboard.PasteboardType] = [.png, .jpeg, .heic, .tiff, .image]
-            if let preferredImageType = imageTypes.first(where: types.contains) {
+            if let preferredImageType = imageTypes.first(where: {
+                types.contains($0) && item.data(forType: $0) != nil
+            }) {
                 types.subtract(imageTypes)
                 types.insert(preferredImageType)
             }

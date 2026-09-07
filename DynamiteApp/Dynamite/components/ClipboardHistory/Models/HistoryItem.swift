@@ -41,13 +41,16 @@ final class HistoryItem {
     var isPinned: Bool { pin != nil }
 
     func supersedes(_ item: HistoryItem) -> Bool {
-        item.contents
-            .filter { content in
-                !Self.transientTypes.contains(content.type)
-            }
-            .allSatisfy { content in
-                contents.contains(where: { $0.type == content.type && $0.value == content.value })
-            }
+        let comparableContents = item.contents.filter {
+            !Self.transientTypes.contains($0.type)
+                && $0.type != NSPasteboard.PasteboardType.fileURL.rawValue
+                && $0.value != nil
+        }
+        guard !comparableContents.isEmpty else { return false }
+
+        return comparableContents.allSatisfy { content in
+            contents.contains(where: { $0.type == content.type && $0.value == content.value })
+        }
     }
 
     func generateTitle() -> String {
@@ -163,7 +166,9 @@ final class HistoryItem {
     }
 
     private var imageFileURL: URL? {
-        fileURLs.first { url in
+        allContentData([.fileURL])
+            .compactMap { URL(dataRepresentation: $0, relativeTo: nil, isAbsolute: true) }
+            .first { url in
             guard url.isFileURL else { return false }
             return UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
         }

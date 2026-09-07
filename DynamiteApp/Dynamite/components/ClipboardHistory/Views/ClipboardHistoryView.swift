@@ -1,6 +1,6 @@
 //
 //  ClipboardHistoryView.swift
-//  Dynamite — clipboard tab (sizing rolled back to pre-iter6 adaptive rectangles)
+//  Dynamite — clipboard tab (adaptive square cards)
 //
 
 import Defaults
@@ -28,7 +28,7 @@ struct ClipboardHistoryView: View {
     /// Debounce QL content swap while arrow-key browsing (avoids size thrash).
     @State private var quickLookUpdateWork: DispatchWorkItem?
 
-    // MARK: Pre-iter6 card geometry (adaptive height, ~140 width)
+    // MARK: Card geometry
     private let cardSpacing: CGFloat = 8
     private let cornerRadius: CGFloat = 10
     private let outerHorizontalPadding: CGFloat = 10
@@ -101,9 +101,8 @@ struct ClipboardHistoryView: View {
 
     private func layoutMetrics(in size: CGSize) -> LayoutMetrics {
         let available = max(0, size.height - topSafe - bottomSafe)
-        let cardH = min(max(available, 56), 120)
-        let cardW = max(100, min(cardH * 1.35, 140))
-        return LayoutMetrics(cardHeight: cardH, cardWidth: cardW, cornerRadius: cornerRadius)
+        let side = min(max(available, 56), 120)
+        return LayoutMetrics(cardHeight: side, cardWidth: side, cornerRadius: cornerRadius)
     }
 
     // MARK: - Cards
@@ -149,12 +148,10 @@ struct ClipboardHistoryView: View {
                 .scrollIndicators(.never)
                 .onChange(of: manager.selectedIndex) { _, newValue in
                     guard manager.visibleItems.indices.contains(newValue) else { return }
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        proxy.scrollTo(
-                            manager.visibleItems[newValue].persistentModelID,
-                            anchor: .center
-                        )
-                    }
+                    // Keyboard navigation must remain synchronous. Animating a
+                    // second ScrollView transaction for every repeated arrow
+                    // key made the notch feel one step behind the selection.
+                    proxy.scrollTo(manager.visibleItems[newValue].persistentModelID, anchor: .center)
                 }
                 .onChange(of: copyPhase) { _, phase in
                     if phase == .flying, let first = manager.visibleItems.first {
@@ -359,14 +356,10 @@ struct ClipboardHistoryView: View {
     }
 
     private func requestKeyWindow() {
+        // DynamiteSkyLightWindow handles the single makeKey() synchronously.
+        // Do not scan NSApp.windows here: this path runs on every clipboard
+        // tab activation and used to queue duplicate focus transactions.
         NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: true)
-        DispatchQueue.main.async {
-            for window in NSApp.windows {
-                if window is DynamiteSkyLightWindow || window is DynamiteWindow {
-                    window.makeKey()
-                }
-            }
-        }
     }
 }
 

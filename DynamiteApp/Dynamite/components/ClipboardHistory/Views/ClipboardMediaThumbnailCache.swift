@@ -80,6 +80,23 @@ enum ClipboardMediaThumbnailCache {
     }
 
     private static func generate(for item: HistoryItem, size: CGSize) async -> NSImage? {
+        // Vaulted images must be downsampled directly from disk. Calling
+        // item.imageData first reads the complete original into memory for
+        // every visible card; nine large screenshots can otherwise recreate
+        // the 250–300 MB footprint even though the history is disk-backed.
+        if item.contentKind == .image, let url = item.mediaPreviewURL {
+            if let thumbnail = await thumbnailOnBackground(url: url, to: size) {
+                return thumbnail
+            }
+            // Some pasteboard/file providers expose a valid image only through
+            // their data representation. Retry just this card; the normal
+            // vaulted path above remains a bounded ImageIO downsample.
+            if let data = item.imageData {
+                return await thumbnailOnBackground(data: data, to: size)
+            }
+            return nil
+        }
+
         // Decode directly to a thumbnail. Creating a full-size NSImage first
         // briefly decoded a 4K/8K source and could consume tens of MB per card.
         if let data = item.imageData {
@@ -106,6 +123,26 @@ enum ClipboardMediaThumbnailCache {
         return nil
     }
 
+    private static func thumbnailOnBackground(url: URL, to size: CGSize) async -> NSImage? {
+        await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+                return nil
+            }
+            let maxPixelSize = max(1, Int(max(size.width, size.height) * 2.0))
+            let options: [CFString: Any] = [
+                kCGImageSourceShouldCache: false,
+                kCGImageSourceShouldCacheImmediately: false,
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                return nil
+            }
+            return NSImage(cgImage: cgImage, size: size)
+        }.value
+    }
+
     private static func thumbnailOnBackground(data: Data, to size: CGSize) async -> NSImage? {
         await Task.detached(priority: .userInitiated) {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
@@ -113,6 +150,8 @@ enum ClipboardMediaThumbnailCache {
             }
             let maxPixelSize = max(1, Int(max(size.width, size.height) * 2.0))
             let options: [CFString: Any] = [
+                kCGImageSourceShouldCache: false,
+                kCGImageSourceShouldCacheImmediately: false,
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixelSize

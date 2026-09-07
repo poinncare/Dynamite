@@ -194,9 +194,10 @@ final class ClipboardKeyboardMonitor: ObservableObject {
         let order = visibleTabOrder
         guard order.indices.contains(index) else { return }
         let target = order[index]
-        withAnimation(.easeInOut(duration: 0.15)) {
-            BoringViewCoordinator.shared.currentView = target
-        }
+        // The tab content owns its original transition. Wrapping the state
+        // change in a second animation made rapid shortcut presses queue
+        // competing layout transactions and caused visible input lag.
+        BoringViewCoordinator.shared.currentView = target
     }
 
     private func cycleTab(delta: Int) {
@@ -206,9 +207,7 @@ final class ClipboardKeyboardMonitor: ObservableObject {
         let current = BoringViewCoordinator.shared.currentView
         let idx = available.firstIndex(of: current) ?? 0
         let next = (idx + delta + available.count) % available.count
-        withAnimation(.easeInOut(duration: 0.15)) {
-            BoringViewCoordinator.shared.currentView = available[next]
-        }
+        BoringViewCoordinator.shared.currentView = available[next]
     }
 
     private func closeNotchIfOpen() {

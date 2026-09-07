@@ -167,13 +167,6 @@ struct ContentView: View {
                             // Notch-wide ⌘1–3 / ⌘⇧[] + key focus on any tab
                             ClipboardKeyboardMonitor.shared.startNotchSession()
                             NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: true)
-                            DispatchQueue.main.async {
-                                for window in NSApp.windows {
-                                    if window is DynamiteSkyLightWindow || window is DynamiteWindow {
-                                        window.makeKey()
-                                    }
-                                }
-                            }
                         } else if newState == .closed {
                             NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: false)
                             ClipboardKeyboardMonitor.shared.stop()
@@ -186,13 +179,6 @@ struct ContentView: View {
                             // ClipboardHistoryView listens and rebinds callbacks (onAppear may race with transition).
                             NotificationCenter.default.post(name: .clipboardTabDidActivate, object: nil)
                             NotificationCenter.default.post(name: .clipboardTabKeyFocus, object: true)
-                            DispatchQueue.main.async {
-                                for window in NSApp.windows {
-                                    if window is DynamiteSkyLightWindow || window is DynamiteWindow {
-                                        window.makeKey()
-                                    }
-                                }
-                            }
                         } else {
                             // Drop clipboard-only handlers; keep notch-wide ⌘ session + key focus
                             ClipboardKeyboardMonitor.shared.disableClipboardHandlers()

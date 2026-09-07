@@ -7,7 +7,7 @@
 //  longer load → cards go blank.
 //
 //  Fix on capture (and migrate on load):
-//    • Images  → embed bitmap Data into HistoryItemContent (survives restart)
+//    • Images  → store bitmap bytes in the vault and keep only a file URL in memory
 //    • Videos  → copy the file into Application Support/ClipboardMedia and
 //                rewrite the fileURL content to the durable path
 //    • Image files also get a vault copy when useful for Quick Look
@@ -21,6 +21,7 @@ import UniformTypeIdentifiers
 enum ClipboardMediaVault {
     private static let folderName = "ClipboardMedia"
     private static let markerType = "org.dynamite.clipboard.media-vault"
+    private static let compactMarkerType = "org.dynamite.clipboard.media-vault-v2"
 
     static var rootURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -35,9 +36,10 @@ enum ClipboardMediaVault {
     /// Call right after creating a HistoryItem from the pasteboard, before save.
     static func materialize(_ item: HistoryItem) {
         ensureRoot()
-        embedImageDataIfNeeded(item)
         relocateMediaFileURLs(item)
+        offloadEmbeddedImageDataIfNeeded(item)
         markMaterialized(item)
+        markCompact(item)
     }
 
     /// Repair older history rows that only hold fragile file URLs.
@@ -45,15 +47,15 @@ enum ClipboardMediaVault {
         ensureRoot()
         var changed = false
         for item in items {
-            if isMaterialized(item) {
+            if isCompact(item) {
                 continue
             }
-            // Do not decode legacy bitmap data during launch. Existing bitmap
-            // payloads are already durable; file URLs are relocated below.
-            // The previous eager embed path decoded every old image into
-            // memory before the history cap was applied.
             relocateMediaFileURLs(item)
+            // Legacy versions embedded full bitmap Data in SwiftData. Move it
+            // to the vault before the view can create cards for the item.
+            offloadEmbeddedImageDataIfNeeded(item)
             markMaterialized(item)
+            markCompact(item)
             changed = true
         }
         if changed {
@@ -64,30 +66,70 @@ enum ClipboardMediaVault {
     /// Remove vault files owned by a history item (on delete / eviction).
     static func removeFiles(for item: HistoryItem) {
         let root = rootURL.path
-        for url in item.fileURLs {
+        for url in fileURLs(in: item) {
             guard url.isFileURL, url.path.hasPrefix(root) else { continue }
             try? FileManager.default.removeItem(at: url)
         }
     }
 
-    // MARK: - Image embedding
+    // MARK: - Image storage
 
-    /// Prefer pasteboard bitmap. If missing, read image file URL while still accessible.
-    private static func embedImageDataIfNeeded(_ item: HistoryItem) {
-        if item.imageData != nil { return }
+    /// Move embedded bitmap bytes out of SwiftData. The file URL is enough to
+    /// render previews and the original bytes are loaded only for an explicit
+    /// paste, so large screenshots do not stay resident for the app lifetime.
+    private static func offloadEmbeddedImageDataIfNeeded(_ item: HistoryItem) {
+        let imageTypes = Set(ClipboardStorageType.images.types.map(\.rawValue))
+        let embedded = item.contents.filter {
+            guard let value = $0.value else { return false }
+            return imageTypes.contains($0.type) && !value.isEmpty
+        }
+        guard !embedded.isEmpty else { return }
 
-        for url in item.fileURLs {
-            guard url.isFileURL, isImageFile(url) else { continue }
-            guard FileManager.default.isReadableFile(atPath: url.path) else { continue }
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
+        let existingImageURL = fileURLs(in: item).first(where: { $0.isFileURL && isImageFile($0) })
+        var durableImageURL = existingImageURL
 
-            let type = pasteboardType(forImageAt: url, data: data)
-            // Avoid duplicate type rows.
-            if item.contents.contains(where: { $0.type == type.rawValue && $0.value != nil }) {
-                return
-            }
-            item.contents.append(HistoryItemContent(type: type.rawValue, value: data))
-            return
+        if durableImageURL == nil, let data = embedded.compactMap(\.value).first(where: { !$0.isEmpty }) {
+            durableImageURL = writeIntoVault(data: data, fileExtension: fileExtension(for: embedded[0].type, data: data))
+        }
+
+        guard let durableImageURL else { return }
+
+        if !fileURLs(in: item).contains(durableImageURL) {
+            item.contents.append(
+                HistoryItemContent(
+                    type: NSPasteboard.PasteboardType.fileURL.rawValue,
+                    value: durableImageURL.dataRepresentation
+                )
+            )
+        }
+
+        for content in embedded {
+            content.value = nil
+        }
+    }
+
+    private static func writeIntoVault(data: Data, fileExtension: String) -> URL? {
+        guard !data.isEmpty else { return nil }
+        let destination = rootURL.appendingPathComponent("\(UUID().uuidString).\(fileExtension)")
+        do {
+            try data.write(to: destination, options: [.atomic])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
+    private static func fileExtension(for type: String, data: Data) -> String {
+        switch NSPasteboard.PasteboardType(type) {
+        case .png: return "png"
+        case .jpeg: return "jpg"
+        case .heic: return "heic"
+        case .tiff: return "tiff"
+        default:
+            if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+            if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpg" }
+            return "tiff"
         }
     }
 
@@ -154,8 +196,28 @@ enum ClipboardMediaVault {
         )
     }
 
+    private static func markCompact(_ item: HistoryItem) {
+        guard !isCompact(item) else { return }
+        item.contents.append(
+            HistoryItemContent(type: compactMarkerType, value: Data("1".utf8))
+        )
+    }
+
     private static func isMaterialized(_ item: HistoryItem) -> Bool {
         item.contents.contains { $0.type == markerType }
+    }
+
+    private static func isCompact(_ item: HistoryItem) -> Bool {
+        item.contents.contains { $0.type == compactMarkerType }
+    }
+
+    private static func fileURLs(in item: HistoryItem) -> [URL] {
+        item.contents
+            .filter { $0.type == NSPasteboard.PasteboardType.fileURL.rawValue }
+            .compactMap { content in
+                guard let value = content.value else { return nil }
+                return URL(dataRepresentation: value, relativeTo: nil, isAbsolute: true)
+            }
     }
 
     private static func ensureRoot() {
