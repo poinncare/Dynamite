@@ -32,8 +32,10 @@ struct ClipboardHistoryView: View {
     private let cardSpacing: CGFloat = 8
     private let cornerRadius: CGFloat = 10
     private let outerHorizontalPadding: CGFloat = 10
-    private let bottomSafe: CGFloat = 10
-    private let topSafe: CGFloat = 4
+    // Shelf's reference tile fills the complete content height; Clipboard
+    // uses the same vertical geometry so its square is exactly 140×140.
+    private let bottomSafe: CGFloat = 0
+    private let topSafe: CGFloat = 0
     private let stripHorizontalInset: CGFloat = 2
 
     private var isQuickLookVisible: Bool {
@@ -101,7 +103,8 @@ struct ClipboardHistoryView: View {
 
     private func layoutMetrics(in size: CGSize) -> LayoutMetrics {
         let available = max(0, size.height - topSafe - bottomSafe)
-        let side = min(max(available, 56), 120)
+        // Match the 140×140 logical square used by Shelf's left share tile.
+        let side = min(max(available, 56), 140)
         return LayoutMetrics(cardHeight: side, cardWidth: side, cornerRadius: cornerRadius)
     }
 
