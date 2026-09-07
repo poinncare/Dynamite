@@ -44,10 +44,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenuBarItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(
-            systemSymbolName: "sparkle",
-            accessibilityDescription: "Dynamite"
-        )
+        if let image = NSImage(named: "logo2") {
+            image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = false
+            item.button?.image = image
+        } else {
+            item.button?.image = NSImage(
+                systemSymbolName: "sparkle",
+                accessibilityDescription: "Dynamite"
+            )
+        }
+        item.button?.toolTip = "Dynamite"
 
         let menu = NSMenu()
         let settingsItem = NSMenuItem(
