@@ -75,6 +75,11 @@ jobs:
           ditto \
             "$RUNNER_TEMP/DynamiteDerivedData/Build/Products/Release/Dynamite.app" \
             "Release/Dynamite.app"
+          # Sparkle requires a valid macOS code signature when it inspects the
+          # update archive. Developer ID signing is optional for this public
+          # build, so seal the app with an ad-hoc signature before packaging.
+          codesign --force --deep --sign - "Release/Dynamite.app"
+          codesign --verify --deep --strict "Release/Dynamite.app"
           python3 -m venv "$RUNNER_TEMP/dmg-venv"
           "$RUNNER_TEMP/dmg-venv/bin/python" -m pip install --require-hashes \
             -r DynamiteApp/Configuration/dmg/requirements.txt
