@@ -29,7 +29,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     let vm: BoringViewModel = .init()
     let coordinator = BoringViewCoordinator.shared
-    var quickShareService = QuickShareService.shared
     private var statusItemVisibilityCancellable: AnyCancellable?
     private var updaterController: SPUStandardUpdaterController?
     var whatsNewWindow: NSWindow?
@@ -304,7 +303,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.contentView = NSHostingView(
-            rootView: ContentView()
+            rootView: DeferredNotchRootView()
                 .environmentObject(viewModel)
         )
 
@@ -519,14 +518,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Agent detection + subscription usage (auto-refresh, no restart)
-        Task { @MainActor in
-            if Defaults[.usageTabEnabled] {
-                AgentDetectionService.shared.start(scanImmediately: true)
-                RateLimitService.shared.start(fetchImmediately: false)
-            }
-        }
-
+        // Keep the launch path focused on the clipboard and notch shell.
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
             let window = createBoringNotchWindow(
@@ -544,12 +536,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.showOnboardingWindow()
             }
             playWelcomeSound()
-        } else if MusicManager.shared.isNowPlayingDeprecated
-            && Defaults[.mediaController] == .nowPlaying
-        {
-            DispatchQueue.main.async {
-                self.showOnboardingWindow(step: .musicPermission)
-            }
         }
 
         previousScreens = NSScreen.screens
@@ -732,5 +718,69 @@ extension CGRect: @retroactive Hashable {
 
     public static func == (lhs: CGRect, rhs: CGRect) -> Bool {
         return lhs.origin == rhs.origin && lhs.size == rhs.size
+    }
+}
+
+/// Keeps the parked notch cheap. The full SwiftUI tree is materialized only
+/// after the user opens it and is released again when it closes.
+@MainActor
+private struct DeferredNotchRootView: View {
+    @EnvironmentObject private var viewModel: BoringViewModel
+
+    var body: some View {
+        if viewModel.notchState == .open {
+            ContentView()
+        } else {
+            LightweightClosedNotchView()
+        }
+    }
+}
+
+@MainActor
+private struct LightweightClosedNotchView: View {
+    @EnvironmentObject private var viewModel: BoringViewModel
+    @ObservedObject private var coordinator = BoringViewCoordinator.shared
+    @State private var hoverTask: Task<Void, Never>?
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            if viewModel.effectiveClosedNotchHeight > 0 {
+                RoundedRectangle(cornerRadius: cornerRadiusInsets.closed.top, style: .continuous)
+                    .fill(.black)
+                    .frame(
+                        width: viewModel.closedNotchSize.width,
+                        height: viewModel.effectiveClosedNotchHeight
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.open()
+                    }
+                    .onHover { hovering in
+                        handleHover(hovering)
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onDisappear {
+            hoverTask?.cancel()
+        }
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        hoverTask?.cancel()
+        guard hovering,
+              !coordinator.firstLaunch,
+              viewModel.notchState == .closed,
+              Defaults[.openNotchOnHover]
+        else { return }
+
+        hoverTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Defaults[.minimumHoverDuration]))
+            guard !Task.isCancelled,
+                  viewModel.notchState == .closed,
+                  Defaults[.openNotchOnHover]
+            else { return }
+            viewModel.open()
+        }
     }
 }
