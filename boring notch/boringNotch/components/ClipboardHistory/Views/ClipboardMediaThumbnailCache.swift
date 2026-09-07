@@ -10,7 +10,15 @@ import SwiftData
 /// Shared cache of card-sized media previews so horizontal scroll stays cheap.
 @MainActor
 enum ClipboardMediaThumbnailCache {
-    private static var images: [String: NSImage] = [:]
+    // Thumbnails are presentation data, not application state. Never retain
+    // an unbounded dictionary of decoded bitmaps in a long-running menu-bar
+    // app; NSCache purges them automatically when memory is tight.
+    private static let images: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 18
+        cache.totalCostLimit = 12 * 1024 * 1024
+        return cache
+    }()
     private static var inflight: [String: Task<NSImage?, Never>] = [:]
     private static let lock = NSLock()
 
@@ -19,7 +27,7 @@ enum ClipboardMediaThumbnailCache {
         let key = cacheKey(for: item, size: size)
 
         lock.lock()
-        if let cached = images[key] {
+        if let cached = images.object(forKey: key as NSString) {
             lock.unlock()
             return cached
         }
@@ -33,7 +41,8 @@ enum ClipboardMediaThumbnailCache {
             let image = await generate(for: item, size: size)
             lock.lock()
             if let image {
-                images[key] = image
+                let pixelCost = max(1, Int(image.size.width * image.size.height * 4))
+                images.setObject(image, forKey: key as NSString, cost: pixelCost)
             }
             inflight[key] = nil
             lock.unlock()
@@ -52,12 +61,12 @@ enum ClipboardMediaThumbnailCache {
         let key = cacheKey(for: item, size: size)
         lock.lock()
         defer { lock.unlock() }
-        return images[key]
+        return images.object(forKey: key as NSString)
     }
 
     static func clear() {
         lock.lock()
-        images.removeAll()
+        images.removeAllObjects()
         inflight.values.forEach { $0.cancel() }
         inflight.removeAll()
         lock.unlock()
@@ -71,9 +80,10 @@ enum ClipboardMediaThumbnailCache {
     }
 
     private static func generate(for item: HistoryItem, size: CGSize) async -> NSImage? {
-        // Prefer bitmap pasteboard data / image file → NSImage, resized for the card.
-        if let raw = item.image {
-            return await resizeOnBackground(raw, to: size)
+        // Decode directly to a thumbnail. Creating a full-size NSImage first
+        // briefly decoded a 4K/8K source and could consume tens of MB per card.
+        if let data = item.imageData {
+            return await thumbnailOnBackground(data: data, to: size)
         }
 
         // Video (or image file that failed NSImage): Quick Look content preview (not type icon).
@@ -96,38 +106,21 @@ enum ClipboardMediaThumbnailCache {
         return nil
     }
 
-    private static func resizeOnBackground(_ image: NSImage, to size: CGSize) async -> NSImage? {
+    private static func thumbnailOnBackground(data: Data, to size: CGSize) async -> NSImage? {
         await Task.detached(priority: .userInitiated) {
-            Self.resizedFitting(image, in: size)
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+                return nil
+            }
+            let maxPixelSize = max(1, Int(max(size.width, size.height) * 2.0))
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                return nil
+            }
+            return NSImage(cgImage: cgImage, size: size)
         }.value
-    }
-
-    /// Scale so the image covers `size` (fill), then crop to center — matches card `.fill` look.
-    nonisolated private static func resizedFitting(_ image: NSImage, in target: CGSize) -> NSImage {
-        let srcSize = image.size
-        guard srcSize.width > 0, srcSize.height > 0,
-              target.width > 0, target.height > 0 else {
-            return image
-        }
-
-        let scale = max(target.width / srcSize.width, target.height / srcSize.height)
-        // Don't enlarge tiny images past ~2× source — keep crisp icons sharp.
-        let drawSize = NSSize(width: srcSize.width * scale, height: srcSize.height * scale)
-
-        let out = NSImage(size: target)
-        out.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .high
-        let origin = NSPoint(
-            x: (target.width - drawSize.width) / 2,
-            y: (target.height - drawSize.height) / 2
-        )
-        image.draw(
-            in: NSRect(origin: origin, size: drawSize),
-            from: NSRect(origin: .zero, size: srcSize),
-            operation: .copy,
-            fraction: 1.0
-        )
-        out.unlockFocus()
-        return out
     }
 }

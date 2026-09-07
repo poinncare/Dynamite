@@ -46,13 +46,12 @@ enum ClipboardMediaVault {
         var changed = false
         for item in items {
             if isMaterialized(item) {
-                // Still rewrite missing image data when vault/file is reachable.
-                let before = item.contents.count
-                embedImageDataIfNeeded(item)
-                if item.contents.count != before { changed = true }
                 continue
             }
-            embedImageDataIfNeeded(item)
+            // Do not decode legacy bitmap data during launch. Existing bitmap
+            // payloads are already durable; file URLs are relocated below.
+            // The previous eager embed path decoded every old image into
+            // memory before the history cap was applied.
             relocateMediaFileURLs(item)
             markMaterialized(item)
             changed = true

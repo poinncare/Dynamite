@@ -164,9 +164,9 @@ struct ClipboardCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .scaleEffect(pressScale)
-        // Flatten card into a single layer for smoother horizontal scroll (ProMotion)
-        .compositingGroup()
-        .drawingGroup(opaque: false)
+        // Avoid a Metal offscreen surface for every card. The card is small
+        // and already consists of native SwiftUI primitives; flattening each
+        // one multiplied GPU memory while the clipboard tab was open.
         // Parent decides select vs copy: first tap selects, second tap on selection activates
         .onTapGesture(perform: onTap)
         .contextMenu {

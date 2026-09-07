@@ -64,7 +64,6 @@ class WebcamManager: NSObject, ObservableObject {
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(deviceWasDisconnected), name: .AVCaptureDeviceWasDisconnected, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(deviceWasConnected), name: .AVCaptureDeviceWasConnected, object: nil)
-        checkCameraAvailability()
     }
     
     deinit {

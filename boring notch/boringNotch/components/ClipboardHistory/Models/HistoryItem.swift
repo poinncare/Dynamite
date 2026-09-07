@@ -8,6 +8,7 @@ import Defaults
 import SwiftData
 import UniformTypeIdentifiers
 import Vision
+import ImageIO
 
 @Model
 final class HistoryItem {
@@ -168,6 +169,14 @@ final class HistoryItem {
         }
     }
 
+    private var hasImageContent: Bool {
+        contents.contains { content in
+            guard let value = content.value, !value.isEmpty else { return false }
+            return [.tiff, .png, .jpeg, .heic, .image]
+                .contains(NSPasteboard.PasteboardType(content.type))
+        }
+    }
+
     /// First file URL that points at a video / movie asset (Finder copy, etc.).
     var videoFileURL: URL? {
         fileURLs.first { url in
@@ -184,7 +193,9 @@ final class HistoryItem {
     }
 
     var contentKind: ClipboardContentKind {
-        if image != nil { return .image }
+        // Never call image here: NSImage(data:) fully decodes large clipboard
+        // bitmaps just to decide which card layout to use.
+        if hasImageContent || imageFileURL != nil { return .image }
         if videoFileURL != nil { return .video }
         if !fileURLs.isEmpty { return .file }
         if let text = text, let url = URL(string: text), url.scheme != nil, text.contains("://") {
@@ -207,7 +218,17 @@ final class HistoryItem {
     }
 
     private func performTextRecognition() {
-        guard let cgImage = image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        guard let data = imageData,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 1600
+                  ] as CFDictionary
+              ) else {
             return
         }
 

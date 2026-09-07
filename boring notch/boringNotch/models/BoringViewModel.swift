@@ -37,7 +37,6 @@ class BoringViewModel: NSObject, ObservableObject {
     @Published var notchSize: CGSize = getClosedNotchSize()
     @Published var closedNotchSize: CGSize = getClosedNotchSize()
     
-    let webcamManager = WebcamManager.shared
     @Published var isCameraExpanded: Bool = false
     @Published var isRequestingAuthorization: Bool = false
     
@@ -133,6 +132,10 @@ class BoringViewModel: NSObject, ObservableObject {
             return
         }
 
+        // Camera discovery is deferred until the user actually requests the
+        // mirror. AVFoundation device enumeration is otherwise paid at app
+        // startup for a feature that is usually unused.
+        let webcamManager = WebcamManager.shared
         switch webcamManager.authorizationStatus {
         case .authorized:
             if webcamManager.isSessionRunning {

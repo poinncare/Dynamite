@@ -56,7 +56,11 @@ final class ClipboardService {
         guard Defaults[.clipboardEnabled] else { return }
         timer?.invalidate()
         timer = Timer.scheduledTimer(
-            timeInterval: Defaults[.clipboardCheckInterval],
+            // Pasteboard changeCount is cheap to read, but polling twice per
+            // second keeps the app awake unnecessarily. One second is still
+            // effectively instant for clipboard history and is a safe floor
+            // for values saved by older versions.
+            timeInterval: max(1.0, Defaults[.clipboardCheckInterval]),
             target: self,
             selector: #selector(checkForChangesInPasteboard),
             userInfo: nil,
@@ -183,6 +187,16 @@ final class ClipboardService {
                 .subtracting(disabledTypes)
                 .filter { !$0.rawValue.starts(with: dynamicTypePrefix) }
                 .filter { !$0.rawValue.starts(with: microsoftSourcePrefix) }
+
+            // A single image often advertises TIFF, PNG, JPEG, HEIC and
+            // public.image simultaneously. Keeping every representation made
+            // one copy occupy several times its actual size in SwiftData.
+            // Keep the first available lossless/native representation only.
+            let imageTypes: [NSPasteboard.PasteboardType] = [.png, .jpeg, .heic, .tiff, .image]
+            if let preferredImageType = imageTypes.first(where: types.contains) {
+                types.subtract(imageTypes)
+                types.insert(preferredImageType)
+            }
 
             if types.isSuperset(of: [.microsoftLinkSource, .microsoftObjectLink]) {
                 types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink])

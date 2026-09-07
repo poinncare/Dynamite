@@ -5,7 +5,6 @@
 //  Created by Harsh Vardhan  Goswami  on 02/08/24.
 //
 
-import AVFoundation
 import Combine
 import Defaults
 import KeyboardShortcuts

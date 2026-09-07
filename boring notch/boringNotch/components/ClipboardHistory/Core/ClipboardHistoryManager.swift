@@ -74,12 +74,28 @@ final class ClipboardHistoryManager: ObservableObject {
     }
 
     func load() async {
-        let descriptor = FetchDescriptor<HistoryItem>(
+        // SwiftData can materialize every Data blob in a relationship while
+        // fetching. Only the visible window (plus a bounded safety margin of
+        // pinned items) is needed at launch; loading an old 200-item history
+        // made startup memory scale with the entire clipboard archive.
+        var recentDescriptor = FetchDescriptor<HistoryItem>(
             sortBy: [SortDescriptor(\.lastCopiedAt, order: .reverse)]
         )
         do {
-            let results = try ClipboardStorage.shared.context.fetch(descriptor)
-            // Repair media that only held fragile file URLs (pre-vault history).
+            recentDescriptor.fetchLimit = max(Defaults[.clipboardHistorySize], 9)
+            let recent = try ClipboardStorage.shared.context.fetch(recentDescriptor)
+
+            var pinnedDescriptor = FetchDescriptor<HistoryItem>(
+                predicate: #Predicate { $0.pin != nil },
+                sortBy: [SortDescriptor(\.lastCopiedAt, order: .reverse)]
+            )
+            pinnedDescriptor.fetchLimit = 32
+            let pinned = try ClipboardStorage.shared.context.fetch(pinnedDescriptor)
+            var seen = Set<PersistentIdentifier>()
+            let results = (recent + pinned).filter { seen.insert($0.persistentModelID).inserted }
+
+            // Repair only the bounded launch set. Older rows are cleaned up
+            // when they become visible instead of being decoded eagerly.
             ClipboardMediaVault.migrateIfNeeded(results)
             allItems = sort(results)
             limitHistorySize(to: Defaults[.clipboardHistorySize])

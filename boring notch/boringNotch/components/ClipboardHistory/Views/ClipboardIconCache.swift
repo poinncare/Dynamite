@@ -6,21 +6,32 @@
 import AppKit
 
 enum ClipboardIconCache {
-    private static var appIcons: [String: NSImage] = [:]
-    private static var fileIcons: [String: NSImage] = [:]
-    private static let lock = NSLock()
+    // NSCache is thread-safe, automatically purges under pressure, and keeps
+    // icon lookups bounded. The old dictionaries retained every path ever
+    // seen by the shelf/clipboard for the lifetime of the process.
+    private static let appIcons: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 32
+        cache.totalCostLimit = 4 * 1024 * 1024
+        return cache
+    }()
+    private static let fileIcons: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
 
     static func appIcon(bundleId: String?) -> NSImage? {
         guard let bundleId, !bundleId.isEmpty else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = appIcons[bundleId] { return cached }
+        let key = bundleId as NSString
+        if let cached = appIcons.object(forKey: key) { return cached }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
             return nil
         }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
         icon.size = NSSize(width: 32, height: 32)
-        appIcons[bundleId] = icon
+        appIcons.setObject(icon, forKey: key, cost: 32 * 32 * 4)
         return icon
     }
 
@@ -28,12 +39,11 @@ enum ClipboardIconCache {
         guard let path, !path.isEmpty else {
             return NSImage(systemSymbolName: "doc", accessibilityDescription: nil) ?? NSImage()
         }
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = fileIcons[path] { return cached }
+        let key = path as NSString
+        if let cached = fileIcons.object(forKey: key) { return cached }
         let icon = NSWorkspace.shared.icon(forFile: path)
         icon.size = NSSize(width: 32, height: 32)
-        fileIcons[path] = icon
+        fileIcons.setObject(icon, forKey: key, cost: 32 * 32 * 4)
         return icon
     }
 }
