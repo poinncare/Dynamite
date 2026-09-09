@@ -380,9 +380,6 @@ struct ContentView: View {
                 // or media thumbnails; animating the complete subtree caused
                 // layout transactions to pile up and made tab switching appear
                 // frozen under load. Open/close animation remains on the shell.
-                .transaction { transaction in
-                    transaction.animation = nil
-                }
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
                 .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
@@ -573,7 +570,6 @@ private struct TabContentView: View {
                 guard !Task.isCancelled else { return }
                 var transaction = Transaction()
                 transaction.animation = nil
-                transaction.disablesAnimations = true
                 withTransaction(transaction) {
                     displayedView = newView
                 }
