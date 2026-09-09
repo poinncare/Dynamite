@@ -121,10 +121,19 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" Release/Dynamite.dmg \
-            --repo "$REPOSITORY" \
-            --title "Dynamite v${VERSION}" \
-            --generate-notes
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$REPOSITORY" \
+              --title "Dynamite v${VERSION}"
+            gh release upload "$TAG" Release/Dynamite.dmg \
+              --repo "$REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" Release/Dynamite.dmg \
+              --repo "$REPOSITORY" \
+              --title "Dynamite v${VERSION}" \
+              --generate-notes
+          fi
 
       - name: Update appcast on main
         env:

@@ -382,7 +382,6 @@ struct ContentView: View {
                 // frozen under load. Open/close animation remains on the shell.
                 .transaction { transaction in
                     transaction.animation = nil
-                    transaction.disablesAnimations = true
                 }
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)

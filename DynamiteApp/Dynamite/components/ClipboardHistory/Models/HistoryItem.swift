@@ -54,9 +54,9 @@ final class HistoryItem {
     }
 
     func generateTitle() -> String {
-        guard image == nil else {
-            Task { @MainActor in
-                self.performTextRecognition()
+        guard contentKind != .image else {
+            Task { @MainActor [weak self] in
+                self?.performTextRecognition()
             }
             return ""
         }
@@ -223,36 +223,51 @@ final class HistoryItem {
     }
 
     private func performTextRecognition() {
-        guard let data = imageData,
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(
-                  source,
-                  0,
-                  [
-                      kCGImageSourceCreateThumbnailFromImageAlways: true,
-                      kCGImageSourceCreateThumbnailWithTransform: true,
-                      kCGImageSourceThumbnailMaxPixelSize: 1600
-                  ] as CFDictionary
-              ) else {
-            return
-        }
+        // Prefer the vaulted file so OCR never creates a Data copy of the
+        // original image. The in-memory fallback is only for legacy rows that
+        // have not been materialized yet.
+        autoreleasepool {
+            let source: CGImageSource?
+            if let imageFileURL {
+                source = CGImageSourceCreateWithURL(imageFileURL as CFURL, nil)
+            } else if let data = imageData {
+                source = CGImageSourceCreateWithData(data as CFData, nil)
+            } else {
+                source = nil
+            }
 
-        let requestHandler = VNImageRequestHandler(cgImage: cgImage)
-        let request = VNRecognizeTextRequest { [weak self] request, _ in
-            guard let observations = request.results as? [VNRecognizedTextObservation] else {
+            guard let source,
+                  let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                      source,
+                      0,
+                      [
+                          kCGImageSourceShouldCache: false,
+                          kCGImageSourceShouldCacheImmediately: false,
+                          kCGImageSourceCreateThumbnailFromImageAlways: true,
+                          kCGImageSourceCreateThumbnailWithTransform: true,
+                          kCGImageSourceThumbnailMaxPixelSize: 1600
+                      ] as CFDictionary
+                  ) else {
                 return
             }
-            let recognizedStrings = observations.compactMap { observation in
-                observation.topCandidates(1).first?.string
-            }
-            self?.title = recognizedStrings.joined(separator: "\n")
-        }
-        request.recognitionLevel = .fast
 
-        do {
-            try requestHandler.perform([request])
-        } catch {
-            print("Unable to perform OCR request: \(error).")
+            let requestHandler = VNImageRequestHandler(cgImage: cgImage)
+            let request = VNRecognizeTextRequest { [weak self] request, _ in
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    return
+                }
+                let recognizedStrings = observations.compactMap { observation in
+                    observation.topCandidates(1).first?.string
+                }
+                self?.title = recognizedStrings.joined(separator: "\n")
+            }
+            request.recognitionLevel = .fast
+
+            do {
+                try requestHandler.perform([request])
+            } catch {
+                print("Unable to perform OCR request: \(error).")
+            }
         }
     }
 }

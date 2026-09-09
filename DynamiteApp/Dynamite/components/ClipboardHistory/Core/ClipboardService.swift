@@ -224,6 +224,10 @@ final class ClipboardService {
 
         let historyItem = HistoryItem(contents: contents)
         historyItem.application = sourceApp?.bundleIdentifier
+        // Move image/video payloads out of the model before any derived fields
+        // inspect the item. In particular, OCR must read a bounded thumbnail
+        // from the vault instead of decoding the pasteboard's full bitmap.
+        ClipboardMediaVault.materialize(historyItem)
         historyItem.title = historyItem.generateTitle()
 
         onNewCopyHooks.forEach { $0(historyItem) }
