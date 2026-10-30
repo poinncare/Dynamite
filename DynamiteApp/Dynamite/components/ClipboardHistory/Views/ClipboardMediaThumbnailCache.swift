@@ -10,66 +10,59 @@ import SwiftData
 /// Shared cache of card-sized media previews so horizontal scroll stays cheap.
 @MainActor
 enum ClipboardMediaThumbnailCache {
-    // Thumbnails are presentation data, not application state. Never retain
-    // an unbounded dictionary of decoded bitmaps in a long-running menu-bar
-    // app; NSCache purges them automatically when memory is tight.
-    private static let images: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 18
-        cache.totalCostLimit = 12 * 1024 * 1024
-        return cache
-    }()
-    private static var inflight: [String: Task<NSImage?, Never>] = [:]
-    private static let lock = NSLock()
+    // Main-actor confined and explicitly bounded by entry count and pixel cost.
+    private struct CachedImage {
+        let image: CGImage
+        let cost: Int
+    }
+    private static var images: [String: CachedImage] = [:]
+    private static var imageOrder: [String] = []
+    private static var cachedCost = 0
+    private static let imageCountLimit = 18
+    private static let imageCostLimit = 12 * 1024 * 1024
+    private static var inflight: [String: Task<CGImage?, Never>] = [:]
 
     /// Point size of the card; retinas scale inside generators.
     static func thumbnail(for item: HistoryItem, size: CGSize) async -> NSImage? {
         let key = cacheKey(for: item, size: size)
 
-        lock.lock()
-        if let cached = images.object(forKey: key as NSString) {
-            lock.unlock()
-            return cached
+        if let cached = images[key] {
+            touch(key)
+            return NSImage(cgImage: cached.image, size: size)
         }
         if let existing = inflight[key] {
-            lock.unlock()
-            return await existing.value
+            guard let image = await existing.value else { return nil }
+            return NSImage(cgImage: image, size: size)
         }
-        lock.unlock()
 
-        let task = Task<NSImage?, Never> {
+        let task = Task<CGImage?, Never> {
             let image = await generate(for: item, size: size)
-            lock.lock()
             if let image {
-                let pixelCost = max(1, Int(image.size.width * image.size.height * 4))
-                images.setObject(image, forKey: key as NSString, cost: pixelCost)
+                insert(image, for: key)
             }
             inflight[key] = nil
-            lock.unlock()
             return image
         }
 
-        lock.lock()
         inflight[key] = task
-        lock.unlock()
-
-        return await task.value
+        guard let image = await task.value else { return nil }
+        return NSImage(cgImage: image, size: size)
     }
 
     /// Synchronous hit only — used to avoid a flash when the view reappears.
     static func cached(for item: HistoryItem, size: CGSize) -> NSImage? {
         let key = cacheKey(for: item, size: size)
-        lock.lock()
-        defer { lock.unlock() }
-        return images.object(forKey: key as NSString)
+        guard let cached = images[key] else { return nil }
+        touch(key)
+        return NSImage(cgImage: cached.image, size: size)
     }
 
     static func clear() {
-        lock.lock()
-        images.removeAllObjects()
+        images.removeAll()
+        imageOrder.removeAll()
+        cachedCost = 0
         inflight.values.forEach { $0.cancel() }
         inflight.removeAll()
-        lock.unlock()
     }
 
     // MARK: - Private
@@ -79,7 +72,30 @@ enum ClipboardMediaThumbnailCache {
         "\(item.persistentModelID)_\(item.lastCopiedAt.timeIntervalSince1970)_\(Int(size.width))x\(Int(size.height))"
     }
 
-    private static func generate(for item: HistoryItem, size: CGSize) async -> NSImage? {
+    private static func insert(_ image: CGImage, for key: String) {
+        let cost = max(1, image.width * image.height * 4)
+        if let previous = images.removeValue(forKey: key) {
+            cachedCost -= previous.cost
+            imageOrder.removeAll { $0 == key }
+        }
+        images[key] = CachedImage(image: image, cost: cost)
+        imageOrder.append(key)
+        cachedCost += cost
+
+        while images.count > imageCountLimit || cachedCost > imageCostLimit {
+            guard let oldest = imageOrder.first,
+                  let evicted = images.removeValue(forKey: oldest) else { break }
+            imageOrder.removeFirst()
+            cachedCost -= evicted.cost
+        }
+    }
+
+    private static func touch(_ key: String) {
+        imageOrder.removeAll { $0 == key }
+        imageOrder.append(key)
+    }
+
+    private static func generate(for item: HistoryItem, size: CGSize) async -> CGImage? {
         // Vaulted images must be downsampled directly from disk. Calling
         // item.imageData first reads the complete original into memory for
         // every visible card; nine large screenshots can otherwise recreate
@@ -92,7 +108,8 @@ enum ClipboardMediaThumbnailCache {
             // their data representation. Retry just this card; the normal
             // vaulted path above remains a bounded ImageIO downsample.
             if let data = item.imageData {
-                return await thumbnailOnBackground(data: data, to: size)
+                guard let thumbnail = await thumbnailOnBackground(data: data, to: size) else { return nil }
+                return thumbnail
             }
             return nil
         }
@@ -100,7 +117,8 @@ enum ClipboardMediaThumbnailCache {
         // Decode directly to a thumbnail. Creating a full-size NSImage first
         // briefly decoded a 4K/8K source and could consume tens of MB per card.
         if let data = item.imageData {
-            return await thumbnailOnBackground(data: data, to: size)
+            guard let thumbnail = await thumbnailOnBackground(data: data, to: size) else { return nil }
+            return thumbnail
         }
 
         // Video (or image file that failed NSImage): Quick Look content preview (not type icon).
@@ -117,13 +135,14 @@ enum ClipboardMediaThumbnailCache {
                 return ql
             }
             // Fallback: workspace file icon (better than empty)
-            return ClipboardIconCache.fileIcon(path: url.path)
+            let icon = ClipboardIconCache.fileIcon(path: url.path)
+            return icon.cgImage(forProposedRect: nil, context: nil, hints: nil)
         }
 
         return nil
     }
 
-    private static func thumbnailOnBackground(url: URL, to size: CGSize) async -> NSImage? {
+    private static func thumbnailOnBackground(url: URL, to size: CGSize) async -> CGImage? {
         await Task.detached(priority: .userInitiated) {
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
                 return nil
@@ -139,11 +158,11 @@ enum ClipboardMediaThumbnailCache {
             guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
                 return nil
             }
-            return NSImage(cgImage: cgImage, size: size)
+            return cgImage
         }.value
     }
 
-    private static func thumbnailOnBackground(data: Data, to size: CGSize) async -> NSImage? {
+    private static func thumbnailOnBackground(data: Data, to size: CGSize) async -> CGImage? {
         await Task.detached(priority: .userInitiated) {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
                 return nil
@@ -159,7 +178,7 @@ enum ClipboardMediaThumbnailCache {
             guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
                 return nil
             }
-            return NSImage(cgImage: cgImage, size: size)
+            return cgImage
         }.value
     }
 }

@@ -12,15 +12,16 @@ public protocol ImageServiceProtocol {
     func fetchImageData(from url: URL) async throws -> Data
 }
 
+@MainActor
 public final class ImageService: ImageServiceProtocol {
     public static let shared = ImageService()
 
     private let session: URLSession
 
     private init() {
-        let config = URLSessionConfiguration.default
-        let cache = URLCache(memoryCapacity: 50 * 1024 * 1024, // 50MB
-                             diskCapacity: 100 * 1024 * 1024, // 100MB
+        let config = URLSessionConfiguration.ephemeral
+        let cache = URLCache(memoryCapacity: 4 * 1024 * 1024, // 4MB
+                             diskCapacity: 16 * 1024 * 1024, // 16MB
                              diskPath: "artwork_cache")
         config.urlCache = cache
         config.timeoutIntervalForRequest = 15

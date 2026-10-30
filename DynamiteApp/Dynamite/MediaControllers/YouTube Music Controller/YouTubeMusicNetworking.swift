@@ -8,6 +8,7 @@
 import Foundation
 
 // MARK: - HTTP Client
+@MainActor
 final class YouTubeMusicHTTPClient: ObservableObject {
     private let session: URLSession
     private let baseURL: String

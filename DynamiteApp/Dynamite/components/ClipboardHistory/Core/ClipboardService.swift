@@ -88,8 +88,10 @@ final class ClipboardService {
         }
 
         for content in contents {
-            guard content.type != NSPasteboard.PasteboardType.fileURL.rawValue else { continue }
-            let data = content.value ?? imageData(for: content.type, item: item)
+            guard content.type != NSPasteboard.PasteboardType.fileURL.rawValue,
+                  !ClipboardMediaVault.isPayloadMarker(content.type) else { continue }
+            let data = ClipboardMediaVault.dataForCopy(content, in: item)
+                ?? imageData(for: content.type, item: item)
             guard let data else { continue }
             pasteboard.setData(data, forType: NSPasteboard.PasteboardType(content.type))
         }
@@ -154,83 +156,97 @@ final class ClipboardService {
 
     @objc
     func checkForChangesInPasteboard() {
-        guard Defaults[.clipboardEnabled] else { return }
-        guard pasteboard.changeCount != changeCount else { return }
+        autoreleasepool {
+            guard Defaults[.clipboardEnabled] else { return }
+            guard pasteboard.changeCount != changeCount else { return }
 
-        changeCount = pasteboard.changeCount
+            changeCount = pasteboard.changeCount
 
-        if pasteboard.pasteboardItems?.contains(where: { $0.types.contains(.fromMaccy) }) == true {
-            // Our own write — skip re-recording as a new external copy
-            return
-        }
-
-        // Pause capture while ignoreEvents is on; optionally consume only the next event.
-        if Defaults[.clipboardIgnoreEvents] {
-            if Defaults[.clipboardIgnoreOnlyNextEvent] {
-                Defaults[.clipboardIgnoreEvents] = false
-                Defaults[.clipboardIgnoreOnlyNextEvent] = false
-            }
-            return
-        }
-
-        if shouldIgnore(Set(pasteboard.types ?? [])) {
-            return
-        }
-
-        if let sourceAppBundle = sourceApp?.bundleIdentifier, shouldIgnore(sourceAppBundle) {
-            return
-        }
-
-        var contents = [HistoryItemContent]()
-        pasteboard.pasteboardItems?.forEach { item in
-            var types = Set(item.types)
-            if types.contains(.string) && isEmptyString(item) && !richText(item) {
+            if pasteboard.pasteboardItems?.contains(where: { $0.types.contains(.fromMaccy) }) == true {
+                // Our own write — skip re-recording as a new external copy
                 return
             }
 
-            if shouldIgnore(item) {
+            // Pause capture while ignoreEvents is on; optionally consume only the next event.
+            if Defaults[.clipboardIgnoreEvents] {
+                if Defaults[.clipboardIgnoreOnlyNextEvent] {
+                    Defaults[.clipboardIgnoreEvents] = false
+                    Defaults[.clipboardIgnoreOnlyNextEvent] = false
+                }
                 return
             }
 
-            types = types
-                .subtracting(disabledTypes)
-                .filter { !$0.rawValue.starts(with: dynamicTypePrefix) }
-                .filter { !$0.rawValue.starts(with: microsoftSourcePrefix) }
-
-            // A single image often advertises TIFF, PNG, JPEG, HEIC and
-            // public.image simultaneously. Keeping every representation made
-            // one copy occupy several times its actual size in SwiftData.
-            // Keep one representation, but choose the first representation
-            // that actually has bytes: some pasteboards advertise PNG/HEIC
-            // while only providing TIFF lazily.
-            let imageTypes: [NSPasteboard.PasteboardType] = [.png, .jpeg, .heic, .tiff, .image]
-            if let preferredImageType = imageTypes.first(where: {
-                types.contains($0) && item.data(forType: $0) != nil
-            }) {
-                types.subtract(imageTypes)
-                types.insert(preferredImageType)
+            if shouldIgnore(Set(pasteboard.types ?? [])) {
+                return
             }
 
-            if types.isSuperset(of: [.microsoftLinkSource, .microsoftObjectLink]) {
-                types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink])
+            if let sourceAppBundle = sourceApp?.bundleIdentifier, shouldIgnore(sourceAppBundle) {
+                return
             }
 
-            types.forEach { type in
-                contents.append(HistoryItemContent(type: type.rawValue, value: item.data(forType: type)))
+            var contents = [HistoryItemContent]()
+            pasteboard.pasteboardItems?.forEach { item in
+                var types = Set(item.types)
+                if types.contains(.string) && isEmptyString(item) && !richText(item) {
+                    return
+                }
+
+                if shouldIgnore(item) {
+                    return
+                }
+
+                types = types
+                    .subtracting(disabledTypes)
+                    .filter { !$0.rawValue.starts(with: dynamicTypePrefix) }
+                    .filter { !$0.rawValue.starts(with: microsoftSourcePrefix) }
+
+                // A single image often advertises TIFF, PNG, JPEG, HEIC and
+                // public.image simultaneously. Keeping every representation made
+                // one copy occupy several times its actual size in SwiftData.
+                // Keep one representation, but choose the first representation
+                // that actually has bytes: some pasteboards advertise PNG/HEIC
+                // while only providing TIFF lazily.
+                let imageTypes: [NSPasteboard.PasteboardType] = [.png, .jpeg, .heic, .tiff, .image]
+                if let preferredImageType = imageTypes.first(where: {
+                    types.contains($0) && item.data(forType: $0) != nil
+                }) {
+                    types.subtract(imageTypes)
+                    types.insert(preferredImageType)
+                }
+
+                if types.isSuperset(of: [.microsoftLinkSource, .microsoftObjectLink]) {
+                    types = types.subtracting([.microsoftLinkSource, .microsoftObjectLink])
+                }
+
+                types.forEach { type in
+                    guard let data = item.data(forType: type) else {
+                        contents.append(HistoryItemContent(type: type.rawValue))
+                        return
+                    }
+
+                    if let compacted = ClipboardMediaVault.compactCaptureContent(
+                        type: type.rawValue,
+                        data: data
+                    ) {
+                        contents.append(contentsOf: compacted)
+                    } else {
+                        contents.append(HistoryItemContent(type: type.rawValue, value: data))
+                    }
+                }
             }
+
+            guard !contents.isEmpty else { return }
+
+            let historyItem = HistoryItem(contents: contents)
+            historyItem.application = sourceApp?.bundleIdentifier
+            // Move image/video payloads out of the model before any derived fields
+            // inspect the item. In particular, OCR must read a bounded thumbnail
+            // from the vault instead of decoding the pasteboard's full bitmap.
+            ClipboardMediaVault.materialize(historyItem)
+            historyItem.title = historyItem.generateTitle()
+
+            onNewCopyHooks.forEach { $0(historyItem) }
         }
-
-        guard !contents.isEmpty else { return }
-
-        let historyItem = HistoryItem(contents: contents)
-        historyItem.application = sourceApp?.bundleIdentifier
-        // Move image/video payloads out of the model before any derived fields
-        // inspect the item. In particular, OCR must read a bounded thumbnail
-        // from the vault instead of decoding the pasteboard's full bitmap.
-        ClipboardMediaVault.materialize(historyItem)
-        historyItem.title = historyItem.generateTitle()
-
-        onNewCopyHooks.forEach { $0(historyItem) }
     }
 
     private func shouldIgnore(_ types: Set<NSPasteboard.PasteboardType>) -> Bool {
@@ -274,10 +290,12 @@ final class ClipboardService {
 
     private func richText(_ item: NSPasteboardItem) -> Bool {
         if let rtf = item.data(forType: .rtf),
+           rtf.count <= ClipboardMediaVault.maxInlinePayloadBytes / 4,
            let attributedString = NSAttributedString(rtf: rtf, documentAttributes: nil) {
             return !attributedString.string.isEmpty
         }
         if let html = item.data(forType: .html),
+           html.count <= ClipboardMediaVault.maxInlinePayloadBytes / 4,
            let attributedString = NSAttributedString(html: html, documentAttributes: nil) {
             return !attributedString.string.isEmpty
         }

@@ -158,7 +158,7 @@ class AppleMusicController: MediaControllerProtocol {
         try? await AppleScriptHelper.executeVoid(script)
     }
     
-    private func fetchPlaybackInfoAsync() async throws -> NSAppleEventDescriptor? {
+    private func fetchPlaybackInfoAsync() async throws -> AppleScriptResult? {
         let script = """
         tell application "Music"
             set isRunning to true

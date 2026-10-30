@@ -224,14 +224,9 @@ extension Defaults.Keys {
     // Show or hide the title bar
     static let hideTitleBar = Key<Bool>("hideTitleBar", default: true)
     
-    // Helper to determine the default media controller based on NowPlaying deprecation status
-    static var defaultMediaController: MediaControllerType {
-        if MusicManager.shared.isNowPlayingDeprecated {
-            return .appleMusic
-        } else {
-            return .nowPlaying
-        }
-    }
+    // The deprecation check is asynchronous. Keep this default independent of
+    // MusicManager initialization; it selects an Apple Music fallback later.
+    static var defaultMediaController: MediaControllerType { .nowPlaying }
 
     static let didClearLegacyURLCacheV1 = Key<Bool>("didClearLegacyURLCache_v1", default: false)
 }

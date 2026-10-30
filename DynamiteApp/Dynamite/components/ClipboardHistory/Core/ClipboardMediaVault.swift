@@ -22,6 +22,13 @@ enum ClipboardMediaVault {
     private static let folderName = "ClipboardMedia"
     private static let markerType = "org.dynamite.clipboard.media-vault"
     private static let compactMarkerType = "org.dynamite.clipboard.media-vault-v2"
+    private static let payloadMarkerPrefix = "org.dynamite.clipboard.payload."
+
+    // SwiftData keeps HistoryItemContent objects reachable for the lifetime of
+    // the context. Keep rich clipboard payloads small in that graph; the full
+    // value remains available for an explicit paste from the vault.
+    static let maxInlinePayloadBytes = 2 * 1024 * 1024
+    private static let previewPayloadBytes = 64 * 1024
 
     static var rootURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -38,6 +45,7 @@ enum ClipboardMediaVault {
         ensureRoot()
         relocateMediaFileURLs(item)
         offloadEmbeddedImageDataIfNeeded(item)
+        offloadLargePayloadsIfNeeded(item)
         markMaterialized(item)
         markCompact(item)
     }
@@ -47,16 +55,18 @@ enum ClipboardMediaVault {
         ensureRoot()
         var changed = false
         for item in items {
-            if isCompact(item) {
-                continue
+            if !isCompact(item) {
+                relocateMediaFileURLs(item)
+                // Legacy versions embedded full bitmap Data in SwiftData. Move it
+                // to the vault before the view can create cards for the item.
+                offloadEmbeddedImageDataIfNeeded(item)
+                markMaterialized(item)
+                markCompact(item)
+                changed = true
             }
-            relocateMediaFileURLs(item)
-            // Legacy versions embedded full bitmap Data in SwiftData. Move it
-            // to the vault before the view can create cards for the item.
-            offloadEmbeddedImageDataIfNeeded(item)
-            markMaterialized(item)
-            markCompact(item)
-            changed = true
+            // A row can already have the v2 marker while still containing a
+            // large HTML/RTF/text value from before the payload budget existed.
+            changed = offloadLargePayloadsIfNeeded(item) || changed
         }
         if changed {
             try? ClipboardStorage.shared.context.save()
@@ -66,10 +76,43 @@ enum ClipboardMediaVault {
     /// Remove vault files owned by a history item (on delete / eviction).
     static func removeFiles(for item: HistoryItem) {
         let root = rootURL.path
-        for url in fileURLs(in: item) {
+        for url in fileURLs(in: item) + payloadURLs(in: item) {
             guard url.isFileURL, url.path.hasPrefix(root) else { continue }
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Returns the complete value for paste. Normal UI code should continue
+    /// using `HistoryItemContent.value`, which is deliberately only a preview
+    /// for oversized payloads.
+    static func dataForCopy(_ content: HistoryItemContent, in item: HistoryItem) -> Data? {
+        guard !isPayloadMarker(content.type) else { return nil }
+        if let url = payloadURL(for: content.type, in: item),
+           let data = try? Data(contentsOf: url) {
+            return data
+        }
+        return content.value
+    }
+
+    /// Compacts a large pasteboard payload before it is added to a HistoryItem.
+    /// This prevents several rich-text representations from being retained in
+    /// the model at the same time while the capture is being assembled.
+    static func compactCaptureContent(type: String, data: Data) -> [HistoryItemContent]? {
+        let imageTypes = Set(ClipboardStorageType.images.types.map(\.rawValue))
+        let pasteboardType = NSPasteboard.PasteboardType(type)
+        guard data.count > maxInlinePayloadBytes,
+              type != NSPasteboard.PasteboardType.fileURL.rawValue,
+              !imageTypes.contains(type),
+              !isPayloadMarker(type),
+              pasteboardType != .fromMaccy,
+              let url = writeIntoVault(data: data, fileExtension: "bin") else {
+            return nil
+        }
+
+        return [
+            HistoryItemContent(type: type, value: previewData(for: type, data: data)),
+            HistoryItemContent(type: payloadMarkerType(for: type), value: url.dataRepresentation)
+        ]
     }
 
     // MARK: - Image storage
@@ -106,6 +149,47 @@ enum ClipboardMediaVault {
         for content in embedded {
             content.value = nil
         }
+    }
+
+    /// Store oversized text/rich-text/custom payloads on disk. Images already
+    /// use the media path above, so they are intentionally excluded here.
+    @discardableResult
+    private static func offloadLargePayloadsIfNeeded(_ item: HistoryItem) -> Bool {
+        let imageTypes = Set(ClipboardStorageType.images.types.map(\.rawValue))
+        let candidates = item.contents.filter { content in
+            guard let value = content.value,
+                  value.count > maxInlinePayloadBytes else { return false }
+            let type = NSPasteboard.PasteboardType(content.type)
+            return content.type != NSPasteboard.PasteboardType.fileURL.rawValue
+                && !imageTypes.contains(content.type)
+                && !isPayloadMarker(content.type)
+                && payloadURL(for: content.type, in: item) == nil
+                && type != .fromMaccy
+        }
+
+        var changed = false
+        for content in candidates {
+            guard let value = content.value,
+                  let url = writeIntoVault(data: value, fileExtension: "bin") else { continue }
+
+            content.value = previewData(for: content.type, data: value)
+            item.contents.append(
+                HistoryItemContent(
+                    type: payloadMarkerType(for: content.type),
+                    value: url.dataRepresentation
+                )
+            )
+            changed = true
+        }
+        return changed
+    }
+
+    private static func previewData(for type: String, data: Data) -> Data {
+        if type == NSPasteboard.PasteboardType.string.rawValue,
+           let text = String(data: data, encoding: .utf8) {
+            return Data(String(text.prefix(8_192)).utf8)
+        }
+        return Data(data.prefix(previewPayloadBytes))
     }
 
     private static func writeIntoVault(data: Data, fileExtension: String) -> URL? {
@@ -209,6 +293,33 @@ enum ClipboardMediaVault {
 
     private static func isCompact(_ item: HistoryItem) -> Bool {
         item.contents.contains { $0.type == compactMarkerType }
+    }
+
+    static func isPayloadMarker(_ type: String) -> Bool {
+        type.hasPrefix(payloadMarkerPrefix)
+    }
+
+    private static func payloadMarkerType(for type: String) -> String {
+        payloadMarkerPrefix + type
+    }
+
+    private static func payloadURL(for type: String, in item: HistoryItem) -> URL? {
+        let marker = payloadMarkerType(for: type)
+        return item.contents
+            .first(where: { $0.type == marker })
+            .flatMap { content in
+                guard let value = content.value else { return nil }
+                return URL(dataRepresentation: value, relativeTo: nil, isAbsolute: true)
+            }
+    }
+
+    private static func payloadURLs(in item: HistoryItem) -> [URL] {
+        item.contents
+            .filter { isPayloadMarker($0.type) }
+            .compactMap { content in
+                guard let value = content.value else { return nil }
+                return URL(dataRepresentation: value, relativeTo: nil, isAbsolute: true)
+            }
     }
 
     private static func fileURLs(in item: HistoryItem) -> [URL] {

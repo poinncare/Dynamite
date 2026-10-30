@@ -23,6 +23,8 @@ final class HistoryItem {
         NSPasteboard.PasteboardType.chromiumSourceToken.rawValue,
         NSPasteboard.PasteboardType.notesRichText.rawValue
     ]
+    private static let internalTypePrefix = "org.dynamite.clipboard."
+    private static let maxRichTextInspectionBytes = 512 * 1024
 
     var application: String?
     var firstCopiedAt: Date = Date.now
@@ -43,6 +45,7 @@ final class HistoryItem {
     func supersedes(_ item: HistoryItem) -> Bool {
         let comparableContents = item.contents.filter {
             !Self.transientTypes.contains($0.type)
+                && !$0.type.hasPrefix(Self.internalTypePrefix)
                 && $0.type != NSPasteboard.PasteboardType.fileURL.rawValue
                 && $0.value != nil
         }
@@ -108,6 +111,7 @@ final class HistoryItem {
     var htmlData: Data? { contentData([.html]) }
     var html: NSAttributedString? {
         guard let data = htmlData else { return nil }
+        guard data.count <= Self.maxRichTextInspectionBytes else { return nil }
         return NSAttributedString(html: data, documentAttributes: nil)
     }
 
@@ -139,6 +143,7 @@ final class HistoryItem {
     var rtfData: Data? { contentData([.rtf]) }
     var rtf: NSAttributedString? {
         guard let data = rtfData else { return nil }
+        guard data.count <= Self.maxRichTextInspectionBytes else { return nil }
         return NSAttributedString(rtf: data, documentAttributes: nil)
     }
 

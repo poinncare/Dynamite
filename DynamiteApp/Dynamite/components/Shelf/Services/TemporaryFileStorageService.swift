@@ -15,7 +15,9 @@ enum TempFileType {
     case url(URL)
 }
 
-class TemporaryFileStorageService {
+// This stateless service uses only per-call local state and Foundation's
+// thread-safe file APIs, so it can be shared by async shelf operations.
+final class TemporaryFileStorageService: @unchecked Sendable {
     static let shared = TemporaryFileStorageService()
     
     // MARK: - Public Interface

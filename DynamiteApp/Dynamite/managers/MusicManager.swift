@@ -8,6 +8,7 @@ import AppKit
 import Combine
 import Defaults
 import SwiftUI
+import ImageIO
 
 let defaultImage: NSImage = .init(
     systemSymbolName: "heart.fill",
@@ -29,6 +30,7 @@ final class MusicLayoutState: ObservableObject {
     }
 }
 
+@MainActor
 class MusicManager: ObservableObject {
     // MARK: - Properties
     static let shared = MusicManager()
@@ -69,7 +71,9 @@ class MusicManager: ObservableObject {
     @Published var canFavoriteTrack: Bool = false
     @Published var isFavoriteTrack: Bool = false
 
-    private var artworkData: Data? = nil
+    // Keep only a cheap identity for the current artwork. Retaining the raw
+    // network payload here made every track change keep a second large buffer.
+    private var artworkFingerprint: Int?
 
     // Store last values at the time artwork was changed
     private var lastArtworkTitle: String = "I'm Handsome"
@@ -113,10 +117,6 @@ class MusicManager: ObservableObject {
         }
     }
 
-    deinit {
-        destroy()
-    }
-    
     public func destroy() {
         debounceIdleTask?.cancel()
         cancellables.removeAll()
@@ -228,7 +228,7 @@ class MusicManager: ObservableObject {
         let bundleChanged = state.bundleIdentifier != self.lastArtworkBundleIdentifier
 
         // Check for artwork changes
-        let artworkChanged = state.artwork != nil && state.artwork != self.artworkData
+        let artworkChanged = state.artwork != nil && state.artwork?.hashValue != self.artworkFingerprint
         let hasContentChange = titleChanged || artistChanged || albumChanged || artworkChanged || bundleChanged
 
         // Handle artwork and visual transitions for changed content
@@ -244,7 +244,7 @@ class MusicManager: ObservableObject {
                     self.updateAlbumArt(newAlbumArt: appIconImage)
                 }
             }
-            self.artworkData = state.artwork
+            self.artworkFingerprint = state.artwork?.hashValue
 
             if artworkChanged || state.artwork == nil {
                 // Update last artwork change values
@@ -358,6 +358,7 @@ class MusicManager: ObservableObject {
         }
     }
 
+    @MainActor
     func setFavorite(_ favorite: Bool) {
         guard canFavoriteTrack else { return }
         guard let controller = activeController else { return }
@@ -560,8 +561,24 @@ class MusicManager: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            if let artworkImage = NSImage(data: artworkData) {
-                DispatchQueue.main.async { [weak self] in
+            autoreleasepool {
+                guard let source = CGImageSourceCreateWithData(artworkData as CFData, nil),
+                      let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                          source,
+                          0,
+                          [
+                              kCGImageSourceShouldCache: false,
+                              kCGImageSourceShouldCacheImmediately: false,
+                              kCGImageSourceCreateThumbnailFromImageAlways: true,
+                              kCGImageSourceCreateThumbnailWithTransform: true,
+                              kCGImageSourceThumbnailMaxPixelSize: 512
+                          ] as CFDictionary
+                      ) else {
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    let artworkImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                     self?.usingAppIconForArtwork = false
                     self?.updateAlbumArt(newAlbumArt: artworkImage)
                 }
@@ -629,54 +646,63 @@ class MusicManager: ObservableObject {
     }
 
     // MARK: - Public Methods for controlling playback
+    @MainActor
     func playPause() {
         Task {
             await activeController?.togglePlay()
         }
     }
 
+    @MainActor
     func play() {
         Task {
             await activeController?.play()
         }
     }
 
+    @MainActor
     func pause() {
         Task {
             await activeController?.pause()
         }
     }
 
+    @MainActor
     func toggleShuffle() {
         Task {
             await activeController?.toggleShuffle()
         }
     }
 
+    @MainActor
     func toggleRepeat() {
         Task {
             await activeController?.toggleRepeat()
         }
     }
     
+    @MainActor
     func togglePlay() {
         Task {
             await activeController?.togglePlay()
         }
     }
 
+    @MainActor
     func nextTrack() {
         Task {
             await activeController?.nextTrack()
         }
     }
 
+    @MainActor
     func previousTrack() {
         Task {
             await activeController?.previousTrack()
         }
     }
 
+    @MainActor
     func seek(to position: TimeInterval) {
         Task {
             await activeController?.seek(to: position)
@@ -687,6 +713,7 @@ class MusicManager: ObservableObject {
         seek(to: newPos)
     }
     
+    @MainActor
     func setVolume(to level: Double) {
         if let controller = activeController {
             Task {
@@ -715,6 +742,7 @@ class MusicManager: ObservableObject {
         }
     }
 
+    @MainActor
     func forceUpdate() {
         // Request immediate update from the active controller
         Task { [weak self] in
@@ -729,6 +757,7 @@ class MusicManager: ObservableObject {
     }
     
     
+    @MainActor
     func syncVolumeFromActiveApp() async {
         // Check if bundle identifier is valid and if the app is actually running
         guard let bundleID = bundleIdentifier, !bundleID.isEmpty,

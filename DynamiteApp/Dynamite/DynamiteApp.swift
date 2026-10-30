@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Defaults
 import KeyboardShortcuts
 import Sparkle
@@ -139,6 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MemoryBudgetMonitor.shared.stop()
         MusicManager.shared.destroy()
         RateLimitService.shared.stop()
         AgentDetectionService.shared.stop()
@@ -360,6 +362,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
 
+        MemoryBudgetMonitor.shared.start()
+
         setupMenuBarItem()
         // Start Sparkle during application launch so startup checks and the
         // GitHub appcast work even when Settings has never been opened.
@@ -393,15 +397,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             forName: Notification.Name.notchInteraction, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.closeNotchTask?.cancel()
-            self?.closeNotchTask = nil
+            Task { @MainActor in
+                self?.closeNotchTask?.cancel()
+                self?.closeNotchTask = nil
+            }
         }
 
         NotificationCenter.default.addObserver(
             forName: Notification.Name.automaticallySwitchDisplayChanged, object: nil, queue: nil
         ) { [weak self] _ in
-            guard let self = self, let window = self.window else { return }
             Task { @MainActor in
+                guard let self = self, let window = self.window else { return }
                 window.alphaValue = self.coordinator.selectedScreenUUID == self.coordinator.preferredScreenUUID ? 1 : 0
             }
         }
@@ -552,10 +558,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the launch path focused on the clipboard and notch shell.
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
-            let window = createDynamiteWindow(
-                for: NSScreen.main ?? NSScreen.screens.first!, with: viewModel)
-            self.window = window
-            adjustWindowPosition(changeAlpha: true)
+            if let screen = NSScreen.main ?? NSScreen.screens.first {
+                let window = createDynamiteWindow(for: screen, with: viewModel)
+                self.window = window
+                adjustWindowPosition(changeAlpha: true)
+            } else {
+                NSLog("Dynamite: no display is available yet; waiting for a screen connection")
+            }
         } else {
             adjustWindowPosition(changeAlpha: true)
         }
@@ -753,5 +762,67 @@ extension CGRect: @retroactive Hashable {
 
     public static func == (lhs: CGRect, rhs: CGRect) -> Bool {
         return lhs.origin == rhs.origin && lhs.size == rhs.size
+    }
+}
+
+/// Keeps the long-running menu-bar process from retaining a large native
+/// footprint after a short-lived image/text operation. Foundation and AppKit
+/// can keep anonymous VM pages around even after their Swift objects are gone;
+/// use the footprint only to trigger cache cleanup and diagnostics.
+@MainActor
+final class MemoryBudgetMonitor {
+    static let shared = MemoryBudgetMonitor()
+
+    private let cleanupThreshold: UInt64 = 160 * 1024 * 1024
+    private var timer: Timer?
+
+    private init() {}
+
+    func start() {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.check() }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        check()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func check() {
+        let footprint = Self.physicalFootprint()
+        guard footprint >= cleanupThreshold else { return }
+
+        NSLog("Dynamite: memory footprint is %.1f MB; clearing transient caches", Self.megabytes(footprint))
+        ClipboardMediaThumbnailCache.clear()
+        Task { await ThumbnailService.shared.clearCache() }
+        URLCache.shared.removeAllCachedResponses()
+    }
+
+    private static func physicalFootprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    $0,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return UInt64(info.phys_footprint)
+    }
+
+    private static func megabytes(_ bytes: UInt64) -> Double {
+        Double(bytes) / 1024.0 / 1024.0
     }
 }

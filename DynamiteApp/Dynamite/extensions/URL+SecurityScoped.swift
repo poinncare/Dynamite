@@ -22,7 +22,9 @@ extension URL {
     }
     
     /// Async version of accessSecurityScopedResource
-    func accessSecurityScopedResource<Value>(accessor: (URL) async throws -> Value) async rethrows -> Value {
+    func accessSecurityScopedResource<Value: Sendable>(
+        accessor: @MainActor @Sendable (URL) async throws -> Value
+    ) async rethrows -> Value {
         let didStartAccessing = startAccessingSecurityScopedResource()
         defer { 
             if didStartAccessing { 
@@ -34,7 +36,9 @@ extension URL {
 }
 
 extension [URL] {
-    func accessSecurityScopedResources<Value>(accessor: ([URL]) async throws -> Value) async rethrows -> Value {
+    func accessSecurityScopedResources<Value: Sendable>(
+        accessor: @MainActor @Sendable ([URL]) async throws -> Value
+    ) async rethrows -> Value {
         let didStart = self.map { $0.startAccessingSecurityScopedResource() }
         
         defer {

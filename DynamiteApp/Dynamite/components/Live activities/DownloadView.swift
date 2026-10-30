@@ -28,23 +28,25 @@ struct DownloadArea: View {
     @EnvironmentObject var watcher: DownloadWatcher
 
     var body: some View {
-        HStack(alignment: .center) {
-            HStack {
-                if watcher.downloadFiles.first!.browser == .safari {
-                    AppIcon(for: "com.apple.safari")
-                } else {
-                    Image(.chrome).resizable().scaledToFit().frame(width: 30, height: 30)
+        if let download = watcher.downloadFiles.first {
+            HStack(alignment: .center) {
+                HStack {
+                    if download.browser == .safari {
+                        AppIcon(for: "com.apple.safari")
+                    } else {
+                        Image(.chrome).resizable().scaledToFit().frame(width: 30, height: 30)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Download")
+                        Text("In progress").font(.notch(.footnote)).foregroundStyle(.gray)
+                    }
                 }
-                VStack(alignment: .leading) {
-                    Text("Download")
-                    Text("In progress").font(.notch(.footnote)).foregroundStyle(.gray)
-                }
-            }
-            Spacer()
-            HStack(spacing: 12) {
-                VStack(alignment: .trailing) {
-                    Text(watcher.downloadFiles.first!.formattedSize)
-                    Text(watcher.downloadFiles.first!.name).font(.notch(.caption2)).foregroundStyle(.gray)
+                Spacer()
+                HStack(spacing: 12) {
+                    VStack(alignment: .trailing) {
+                        Text(download.formattedSize)
+                        Text(download.name).font(.notch(.caption2)).foregroundStyle(.gray)
+                    }
                 }
             }
         }
