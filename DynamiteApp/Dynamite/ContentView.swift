@@ -163,6 +163,10 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .onReceive(NotificationCenter.default.publisher(for: .clipboardQuickLookDidCloseKeepingNotchOpen)) { _ in
+                        hoverTask?.cancel()
+                        hoverTask = nil
+                    }
                     .onChange(of: vm.notchState) { _, newState in
                         if newState == .closed && isHovering {
                             withAnimation {

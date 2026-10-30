@@ -331,7 +331,14 @@ struct ClipboardHistoryView: View {
     private func releaseNotchHold() {
         guard holdingNotchOpenForQL else { return }
         holdingNotchOpenForQL = false
-        SharingStateManager.shared.endInteraction()
+        let keepNotchOpen = vm.notchState == .open
+        SharingStateManager.shared.endInteraction(keepNotchOpen: keepNotchOpen)
+        if keepNotchOpen {
+            // Cancel a hover-close timer that was waiting while Quick Look
+            // held the notch open.
+            NotificationCenter.default.post(name: .notchInteraction, object: nil)
+            NotificationCenter.default.post(name: .clipboardQuickLookDidCloseKeepingNotchOpen, object: nil)
+        }
     }
 
     // MARK: - Keyboard lifecycle
@@ -395,4 +402,5 @@ extension Notification.Name {
     static let clipboardTabKeyFocus = Notification.Name("clipboardTabKeyFocus")
     static let clipboardTabDidActivate = Notification.Name("clipboardTabDidActivate")
     static let clipboardRequestCloseQuickLook = Notification.Name("clipboardRequestCloseQuickLook")
+    static let clipboardQuickLookDidCloseKeepingNotchOpen = Notification.Name("clipboardQuickLookDidCloseKeepingNotchOpen")
 }

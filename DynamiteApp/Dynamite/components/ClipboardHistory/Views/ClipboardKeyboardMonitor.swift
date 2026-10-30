@@ -157,6 +157,9 @@ final class ClipboardKeyboardMonitor: ObservableObject {
         }
 
         if keyCode == kVK_Space && mods.isEmpty {
+            // Space toggles Quick Look. Ignore key-repeat events so a held
+            // key cannot close the panel and immediately open it again.
+            guard !event.isARepeat else { return nil }
             onSpace?()
             return nil
         }

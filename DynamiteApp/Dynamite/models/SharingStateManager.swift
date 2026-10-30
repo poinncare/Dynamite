@@ -23,11 +23,16 @@ final class SharingStateManager: ObservableObject {
 			if newValue != preventNotchClose {
 				preventNotchClose = newValue
 				if !newValue {
-					NotificationCenter.default.post(name: .sharingDidFinish, object: nil)
+					if suppressNextFinishNotification {
+						suppressNextFinishNotification = false
+					} else {
+						NotificationCenter.default.post(name: .sharingDidFinish, object: nil)
+					}
 				}
 			}
 		}
 	}
+	private var suppressNextFinishNotification = false
 
 	@Published var preventNotchClose: Bool = false
 
@@ -46,7 +51,15 @@ final class SharingStateManager: ObservableObject {
 	}
 
 	func endInteraction() {
-		if activeSessions > 0 { activeSessions -= 1 }
+		endInteraction(keepNotchOpen: false)
+	}
+
+	func endInteraction(keepNotchOpen: Bool) {
+		guard activeSessions > 0 else { return }
+		if keepNotchOpen && activeSessions == 1 {
+			suppressNextFinishNotification = true
+		}
+		activeSessions -= 1
 	}
 
 	func makeDelegate(onEnd: (() -> Void)? = nil) -> SharingLifecycleDelegate {

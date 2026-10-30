@@ -27,6 +27,7 @@ final class QuickLookService: ObservableObject {
 
     func show(urls: [URL], selectFirst: Bool = true, slideshow: Bool = false) {
         guard !urls.isEmpty else { return }
+        let isUpdatingOpenPreview = isQuickLookOpen
 
         var newScoped: [URL] = []
         for url in urls where url.isFileURL {
@@ -44,16 +45,18 @@ final class QuickLookService: ObservableObject {
         self.isQuickLookOpen = true
         self.selectedURL = selectFirst ? urls.first : (selectedURL.flatMap { urls.contains($0) ? $0 : nil } ?? urls.first)
 
-        if host.isPanelVisible {
-            host.reload(urls: urls)
-            return
-        }
-
-        host.present(urls: urls) { [weak self] in
+        let onClose: () -> Void = { [weak self] in
             Task { @MainActor in
                 self?.handlePanelClosedExternally()
             }
         }
+
+        if isUpdatingOpenPreview {
+            host.reload(urls: urls, onClose: onClose)
+            return
+        }
+
+        host.present(urls: urls, onClose: onClose)
     }
 
     func hide() {
@@ -165,6 +168,24 @@ enum QuickLookPanelSizing {
         NSAnimationContext.endGrouping()
     }
 
+    /// Keep Quick Look's content-driven window resize from exposing an
+    /// intermediate frame while a visible preview is being replaced.
+    @discardableResult
+    static func lockToContentFrame(on panel: QLPreviewPanel, urls: [URL]) -> NSRect? {
+        let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return nil }
+        let frame = preferredFrame(for: urls, on: screen)
+
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        // Set max first: the preferred frame already respects the minimum.
+        panel.maxSize = frame.size
+        panel.minSize = frame.size
+        panel.setFrame(frame, display: true, animate: false)
+        NSAnimationContext.endGrouping()
+        return frame
+    }
+
     static func needsRefit(_ panel: QLPreviewPanel, urls: [URL]) -> Bool {
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return false }
@@ -241,6 +262,8 @@ final class QuickLookHostController {
     private var visibilityTimer: Timer?
     private var settleWorkItems: [DispatchWorkItem] = []
     private var revealWorkItem: DispatchWorkItem?
+    private var frameUnlockWorkItem: DispatchWorkItem?
+    private var panelResizeObserver: QuickLookPanelResizeObserver?
     private var onClose: (() -> Void)?
     private var isPresenting = false
     private var isContentSwapping = false
@@ -255,6 +278,9 @@ final class QuickLookHostController {
     func present(urls: [URL], onClose: @escaping () -> Void) {
         self.onClose = onClose
         self.currentURLs = urls
+        frameUnlockWorkItem?.cancel()
+        frameUnlockWorkItem = nil
+        hostView.keepsContentFrameLocked = false
         hostView.urls = urls
         hostView.onUserClosed = { [weak self] in
             self?.handleUserClosed()
@@ -274,29 +300,44 @@ final class QuickLookHostController {
 
         isPresenting = true
         isContentSwapping = true
+        hostView.isProgrammaticUpdate = true
+        hostView.keepsContentFrameLocked = true
         cancelSettle()
         revealWorkItem?.cancel()
 
+        // The first presentation has the same asynchronous frame jump as a
+        // reload. Hide first, then attach the resize guard before Quick Look
+        // starts laying out the preview.
+        ql.alphaValue = 0
         ql.updateController()
         if ql.dataSource == nil {
             ql.dataSource = hostView
             ql.delegate = hostView
         }
 
-        ql.alphaValue = 0
+        hostView.lockedContentFrame = QuickLookPanelSizing.lockToContentFrame(on: ql, urls: urls)
+        panelResizeObserver?.stopObserving()
+        panelResizeObserver = QuickLookPanelResizeObserver(panel: ql, hostView: hostView)
+        panelResizeObserver?.startObserving()
 
         ql.currentPreviewItemIndex = 0
         ql.reloadData()
         ql.makeKeyAndOrderFront(nil)
 
-        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+        hostView.lockedContentFrame = QuickLookPanelSizing.lockToContentFrame(on: ql, urls: urls)
         startVisibilityWatch()
-        revealWhenStable(urls: urls, after: 0.08)
+        // The first QL presentation can resize itself after the first frame.
+        // QL performs another content-driven resize after its initial preview
+        // control begins. Keep the panel hidden through that later layout and
+        // re-apply the target frame before showing it.
+        revealWhenStable(urls: urls, after: 0.44, shouldRevealPanel: true)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if let ql = QLPreviewPanel.shared(), ql.isVisible {
-                QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+                if !self.hostView.keepsContentFrameLocked {
+                    QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+                }
             } else {
                 self.fallbackQLManage(urls: urls)
                 self.isPresenting = false
@@ -304,24 +345,24 @@ final class QuickLookHostController {
         }
     }
 
-    /// Swap items: hide → size to new content aspect → reload → show.
-    func reload(urls: [URL]) {
+    /// Swap items in the current panel without hiding it, so browsing stays seamless.
+    func reload(urls: [URL], onClose: @escaping () -> Void) {
         currentURLs = urls
         hostView.urls = urls
-        guard let ql = QLPreviewPanel.shared(), ql.isVisible || isPanelVisible else {
-            if let onClose {
-                present(urls: urls, onClose: onClose)
-            }
+        self.onClose = onClose
+        guard let ql = QLPreviewPanel.shared() else {
+            present(urls: urls, onClose: onClose)
             return
         }
 
+        let needsInitialReveal = isPresenting || ql.alphaValue < 1
         isContentSwapping = true
+        hostView.isProgrammaticUpdate = true
+        hostView.keepsContentFrameLocked = true
+        frameUnlockWorkItem?.cancel()
+        frameUnlockWorkItem = nil
         cancelSettle()
         revealWorkItem?.cancel()
-
-        // Hide so intermediate auto-size is invisible.
-        ql.alphaValue = 0
-        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
 
         if ql.dataSource == nil || ql.dataSource as AnyObject? !== hostView {
             ql.dataSource = hostView
@@ -331,11 +372,29 @@ final class QuickLookHostController {
         if ql.currentPreviewItemIndex != 0 {
             ql.currentPreviewItemIndex = 0
         }
+        // Apply the new card's final dimensions before asking Quick Look to
+        // reload it. Locking both bounds prevents QL from briefly resizing to
+        // its internal intermediate size during the swap.
+        hostView.lockedContentFrame = QuickLookPanelSizing.lockToContentFrame(on: ql, urls: urls)
+        panelResizeObserver?.stopObserving()
+        panelResizeObserver = QuickLookPanelResizeObserver(panel: ql, hostView: hostView)
+        panelResizeObserver?.startObserving()
         ql.reloadData()
 
-        QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+        // Quick Look may momentarily report the panel as hidden while it swaps
+        // preview controllers. Keep the existing window session on screen.
+        if !ql.isVisible {
+            ql.makeKeyAndOrderFront(nil)
+        }
+
+        // Do not call fitContent here: it releases the fixed bounds before
+        // Quick Look has finished its asynchronous content-driven layout.
         startVisibilityWatch()
-        revealWhenStable(urls: urls, after: 0.07)
+        revealWhenStable(
+            urls: urls,
+            after: needsInitialReveal ? 0.24 : 0.40,
+            shouldRevealPanel: needsInitialReveal
+        )
     }
 
     func dismiss() {
@@ -343,7 +402,14 @@ final class QuickLookHostController {
         cancelSettle()
         revealWorkItem?.cancel()
         revealWorkItem = nil
+        frameUnlockWorkItem?.cancel()
+        frameUnlockWorkItem = nil
         isContentSwapping = false
+        hostView.isProgrammaticUpdate = false
+        hostView.keepsContentFrameLocked = false
+        hostView.lockedContentFrame = nil
+        panelResizeObserver?.stopObserving()
+        panelResizeObserver = nil
         if let ql = QLPreviewPanel.shared(), ql.isVisible {
             ql.alphaValue = 1
             ql.orderOut(nil)
@@ -360,7 +426,14 @@ final class QuickLookHostController {
         cancelSettle()
         revealWorkItem?.cancel()
         revealWorkItem = nil
+        frameUnlockWorkItem?.cancel()
+        frameUnlockWorkItem = nil
         isContentSwapping = false
+        hostView.isProgrammaticUpdate = false
+        hostView.keepsContentFrameLocked = false
+        hostView.lockedContentFrame = nil
+        panelResizeObserver?.stopObserving()
+        panelResizeObserver = nil
         clearPanelDataSource()
         hostPanel?.orderOut(nil)
         hostView.urls = []
@@ -372,13 +445,19 @@ final class QuickLookHostController {
 
     // MARK: - Reveal
 
-    private func revealWhenStable(urls: [URL], after delay: TimeInterval) {
-        let settleDelays: [TimeInterval] = [0.0, 0.03, 0.06]
+    private func revealWhenStable(urls: [URL], after delay: TimeInterval, shouldRevealPanel: Bool) {
+        let settleDelays: [TimeInterval] = shouldRevealPanel
+            ? [0.0, 0.03, 0.06, 0.10, 0.14, 0.18, 0.22, 0.30, 0.36, 0.40]
+            : []
         for d in settleDelays {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.isContentSwapping else { return }
                 guard let ql = QLPreviewPanel.shared() else { return }
-                QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+                if self.hostView.keepsContentFrameLocked {
+                    self.hostView.lockedContentFrame = QuickLookPanelSizing.lockToContentFrame(on: ql, urls: urls)
+                } else {
+                    QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+                }
             }
             settleWorkItems.append(work)
             DispatchQueue.main.asyncAfter(deadline: .now() + d, execute: work)
@@ -389,18 +468,47 @@ final class QuickLookHostController {
             guard let ql = QLPreviewPanel.shared(), ql.isVisible || self.isPanelVisible else {
                 self.isContentSwapping = false
                 self.isPresenting = false
+                self.hostView.isProgrammaticUpdate = false
                 return
             }
-            QuickLookPanelSizing.fitContent(on: ql, urls: urls)
-            NSAnimationContext.beginGrouping()
-            NSAnimationContext.current.duration = 0
-            ql.alphaValue = 1
-            NSAnimationContext.endGrouping()
+            if self.hostView.keepsContentFrameLocked {
+                self.hostView.lockedContentFrame = QuickLookPanelSizing.lockToContentFrame(on: ql, urls: urls)
+            } else {
+                QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+            }
+            if shouldRevealPanel {
+                NSAnimationContext.beginGrouping()
+                NSAnimationContext.current.duration = 0
+                ql.alphaValue = 1
+                NSAnimationContext.endGrouping()
+            }
             self.isContentSwapping = false
             self.isPresenting = false
+            self.hostView.isProgrammaticUpdate = false
+            if self.hostView.keepsContentFrameLocked {
+                self.scheduleFrameUnlock(after: 0.45, urls: urls)
+            }
         }
         revealWorkItem = reveal
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: reveal)
+    }
+
+    private func scheduleFrameUnlock(after delay: TimeInterval, urls: [URL]) {
+        frameUnlockWorkItem?.cancel()
+        let unlock = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.hostView.keepsContentFrameLocked,
+                  !self.isContentSwapping,
+                  let ql = QLPreviewPanel.shared(), ql.isVisible else { return }
+            QuickLookPanelSizing.fitContent(on: ql, urls: urls)
+            self.hostView.keepsContentFrameLocked = false
+            self.hostView.lockedContentFrame = nil
+            self.panelResizeObserver?.stopObserving()
+            self.panelResizeObserver = nil
+            self.frameUnlockWorkItem = nil
+        }
+        frameUnlockWorkItem = unlock
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: unlock)
     }
 
     private func cancelSettle() {
@@ -491,6 +599,9 @@ final class QuickLookHostController {
 final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     var urls: [URL] = []
     var onUserClosed: (() -> Void)?
+    var isProgrammaticUpdate = false
+    var keepsContentFrameLocked = false
+    var lockedContentFrame: NSRect?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -507,13 +618,22 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
         if panel.currentPreviewItemIndex < 0 || panel.currentPreviewItemIndex >= urls.count {
             panel.currentPreviewItemIndex = 0
         }
-        QuickLookPanelSizing.fitContent(on: panel, urls: urls)
+        // A programmatic reload owns the panel bounds until the swap completes.
+        if keepsContentFrameLocked, let lockedContentFrame {
+            panel.setFrame(lockedContentFrame, display: true, animate: false)
+        } else if !isProgrammaticUpdate {
+            QuickLookPanelSizing.fitContent(on: panel, urls: urls)
+        }
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        // Capture this synchronously: Quick Look can relinquish control during
+        // reloadData(), then deliver the callback after the update has settled.
+        let wasProgrammaticUpdate = isProgrammaticUpdate
         DispatchQueue.main.async { [weak self] in
+            guard let self, !wasProgrammaticUpdate, !self.isProgrammaticUpdate else { return }
             if QLPreviewPanel.shared()?.isVisible != true {
-                self?.onUserClosed?()
+                self.onUserClosed?()
             }
         }
     }
@@ -546,6 +666,49 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
     /// Keep media aspect ratio — do not stretch to fill a foreign frame.
     func previewPanel(_ panel: QLPreviewPanel!, preserveAspectRatioFor item: (any QLPreviewItem)!) -> Bool {
         true
+    }
+}
+
+@MainActor
+private final class QuickLookPanelResizeObserver: NSObject {
+    private weak var panel: QLPreviewPanel?
+    private weak var hostView: QuickLookHostView?
+    private var isObserving = false
+
+    init(panel: QLPreviewPanel, hostView: QuickLookHostView) {
+        self.panel = panel
+        self.hostView = hostView
+    }
+
+    func startObserving() {
+        guard !isObserving, let panel else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(panelDidResize(_:)),
+            name: NSWindow.didResizeNotification,
+            object: panel
+        )
+        isObserving = true
+    }
+
+    func stopObserving() {
+        guard isObserving else { return }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResizeNotification, object: panel)
+        isObserving = false
+    }
+
+    @objc private func panelDidResize(_ notification: Notification) {
+        guard let panel, let hostView,
+              hostView.keepsContentFrameLocked,
+              let expectedFrame = hostView.lockedContentFrame else { return }
+        let current = panel.frame
+        guard abs(current.width - expectedFrame.width) > 1
+                || abs(current.height - expectedFrame.height) > 1 else { return }
+
+        // Quick Look can resize itself outside NSWindow's min/max limits while
+        // a new preview is loading. Restore the target frame synchronously in
+        // the resize notification, before the intermediate geometry is drawn.
+        panel.setFrame(expectedFrame, display: true, animate: false)
     }
 }
 
